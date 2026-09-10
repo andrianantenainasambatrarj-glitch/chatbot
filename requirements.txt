@@ -1,4 +1,10 @@
-flask
-SpeechRecognition
-python-docx
-flask-cors 
+# --- Chatbot Vocal : dépendances backend (Python 3.10+) ---
+# L'application requiert aussi le binaire système « ffmpeg » (utilisé par pydub).
+Flask==3.0.3
+flask-cors==4.0.1
+python-docx==1.1.2
+pydub==0.25.1
+vosk==0.3.45
+
+# Serveur WSGI de production (Linux / macOS). Sur Windows, utilisez waitress.
+gunicorn==22.0.0

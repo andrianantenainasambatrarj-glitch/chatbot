@@ -138,6 +138,21 @@
   margin: 15px 0;
   font-size: 1rem;
   color: #333;
+  white-space: pre-wrap;
+}
+
+.error-message {
+  margin-top: 12px;
+  padding: 10px 15px;
+  border-radius: 10px;
+  background: #ffe5e5;
+  color: #b00020;
+  font-size: 0.95rem;
+}
+
+.dark-mode .error-message {
+  background: #4a2430;
+  color: #ffb3c0;
 }
 
 .dark-mode .result {

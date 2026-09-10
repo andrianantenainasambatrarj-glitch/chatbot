@@ -1,6 +1,6 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "Chatbot Vocal",
+  "name": "Chatbot Vocal - Transcription vocale en document Word",
   "icons": [
     {
       "src": "favicon.ico",
@@ -9,17 +9,19 @@
     },
     {
       "src": "logo192.png",
+      "name": "Chatbot Vocal",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
       "src": "logo512.png",
+      "name": "Chatbot Vocal",
       "type": "image/png",
       "sizes": "512x512"
     }
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
+  "theme_color": "#00aaff",
   "background_color": "#ffffff"
 }

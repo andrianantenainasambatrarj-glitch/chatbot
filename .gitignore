@@ -20,18 +20,16 @@ site-packages/
 *.exe
 .vscode/
 
-# Données NLTK téléchargées
-nltk_data/*
-!nltk_data/setup_nltk.py
-
-# Modèles lourds
+# Modèles lourds (téléchargés par scripts/download_model.py)
 models/
 
-# Fichiers générés par l'application
-static/*.docx
+# Fichiers générés par l'application (documents Word + historique)
+data/
 static/*.wav
 static/*.webm
-static/*_history.json
+
+# Outils de test locaux (binaire ffmpeg statique, etc.)
+.test-bin/
 
 # Logs et fichiers temporaires
 *.log
