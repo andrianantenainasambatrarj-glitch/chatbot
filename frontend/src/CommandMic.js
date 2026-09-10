@@ -2,50 +2,59 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getToken, wsUrl } from './api';
 import { MicPcmStream } from './audioStream';
+import Icon from './components/Icon';
+import Waveform from './components/Waveform';
 
-export default function CommandMic({ language, onCommand, onError }) {
+const COMMAND_NAMES = [
+  'new_recording', 'live_mode', 'standard_mode', 'dashboard', 'history',
+  'dark_mode', 'light_mode', 'logout', 'clear_history', 'download_word',
+  'download_pdf', 'insights', 'listen', 'language_english', 'language_french',
+];
+
+export default function CommandMic({ language = 'fr', onCommand, onError, disabled }) {
   const { t } = useTranslation();
-  const [state, setState] = useState('idle'); // idle | connecting | live
+  const [listening, setListening] = useState(false);
   const [events, setEvents] = useState([]);
-
+  const [analyser, setAnalyser] = useState(null);
   const wsRef = useRef(null);
   const micRef = useRef(null);
 
-  const cleanup = () => {
-    micRef.current?.stop();
-    micRef.current = null;
-  };
-
   useEffect(() => () => {
     wsRef.current?.close();
-    cleanup();
+    micRef.current?.stop();
   }, []);
 
+  const pushEvent = (event) =>
+    setEvents((prev) => [...prev.slice(-6), event]);
+
   const stop = () => {
-    wsRef.current?.close();
-    cleanup();
-    setState('idle');
+    micRef.current?.stop();
+    micRef.current = null;
+    setAnalyser(null);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.close();
+    }
+    setListening(false);
   };
 
   const start = async () => {
     setEvents([]);
-    setState('connecting');
-
-    const mic = new MicPcmStream(
-      () => {},
-      (err) => {
-        setState('idle');
-        if (err.name === 'NotAllowedError') onError(t('micDenied'));
-        else if (err.name === 'NotFoundError') onError(t('micNotFound'));
-        else onError(err.message);
-      }
-    );
-
     const ws = new WebSocket(
       wsUrl(`/ws/commands?token=${encodeURIComponent(getToken() || '')}&language=${language}`)
     );
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
+
+    const mic = new MicPcmStream(
+      () => {},
+      (err) => {
+        stop();
+        if (err.name === 'NotAllowedError') onError(t('micDenied'));
+        else if (err.name === 'NotFoundError') onError(t('micNotFound'));
+        else onError(err.message);
+      }
+    );
+    micRef.current = mic;
 
     ws.onmessage = (event) => {
       let message;
@@ -55,92 +64,78 @@ export default function CommandMic({ language, onCommand, onError }) {
         return;
       }
       if (message.type === 'ready') {
-        setState('live');
+        setListening(true);
+      } else if (message.type === 'heard' && message.phrase) {
+        pushEvent({ kind: 'heard', text: message.phrase });
       } else if (message.type === 'command') {
-        setEvents((list) => [
-          { kind: 'command', text: message.command, phrase: message.phrase, at: Date.now() },
-          ...list,
-        ].slice(0, 8));
-        onCommand?.(message.command, message.phrase);
-      } else if (message.type === 'heard') {
-        setEvents((list) =>
-          [{ kind: 'heard', text: message.phrase, at: Date.now() }, ...list].slice(0, 8)
-        );
+        pushEvent({ kind: 'command', text: message.phrase, command: message.command });
+        onCommand(message.command);
+        setTimeout(stop, 700);
       } else if (message.type === 'error') {
         onError(message.error);
-        setState('idle');
-        cleanup();
+        stop();
       }
     };
 
     ws.onclose = () => {
-      cleanup();
-      setState('idle');
+      mic.stop();
+      micRef.current = null;
+      setAnalyser(null);
+      setListening(false);
     };
 
     ws.onopen = async () => {
       mic.attachWebSocket(ws);
       try {
         await mic.start();
+        setAnalyser(mic.analyser);
       } catch {
         ws.close();
       }
     };
-    micRef.current = mic;
-  };
-
-  const COMMAND_LABELS = {
-    new_recording: t('cmd.new'),
-    live_mode: t('cmd.live'),
-    standard_mode: t('cmd.standard'),
-    dashboard: t('cmd.dashboard'),
-    history: t('cmd.history'),
-    dark_mode: t('cmd.dark'),
-    light_mode: t('cmd.light'),
-    logout: t('cmd.logout'),
-    clear_history: t('cmd.clear'),
-    download_word: 'Word',
-    download_pdf: 'PDF',
-    insights: t('cmd.insights'),
-    listen: t('cmd.listen'),
-    language_english: 'English',
-    language_french: 'Français',
   };
 
   return (
-    <div className="live-panel">
-      <p className="live-hint">{t('cmd.hint')}</p>
-      <div className="button-row">
-        {state === 'idle' ? (
-          <button className="record-button" onClick={start}>🎙️ {t('cmd.start')}</button>
-        ) : (
-          <button className="record-button stop" onClick={stop} disabled={state === 'connecting'}>
-            ⏹ {t('cmd.stop')}
-          </button>
-        )}
+    <div className="card live-panel fade-in">
+      <div className="waveform-frame">
+        <Waveform analyser={analyser} active={listening} height={72} />
       </div>
-      {state !== 'idle' && (
-        <div className={`recorder-panel ${state === 'connecting' ? 'paused' : ''}`}>
-          {state === 'live' && <span className="recording-dot" aria-hidden="true"></span>}
-          <span className="recorder-state">
-            {state === 'connecting' ? t('live.starting') : t('cmd.listening')}
-          </span>
-        </div>
-      )}
-      <ul className="command-list">
-        {['nouvel enregistrement', 'mode sombre / clair', 'tableau de bord', 'télécharger word',
-          'résumé', 'déconnexion', 'new recording', 'download pdf'].map((example) => (
-          <li key={example} className="command-example">{example}</li>
+
+      <p className="hint">{t('commands.hint')}</p>
+
+      <div className="record-stage">
+        <button
+          className={`record-circle ${listening ? 'recording' : ''}`}
+          onClick={listening ? stop : start}
+          disabled={disabled}
+          aria-label={listening ? t('commands.stop') : t('commands.start')}
+        >
+          <Icon name={listening ? 'stop' : 'command'} size={listening ? 26 : 29} />
+        </button>
+        <span className="record-caption">
+          {listening ? t('commands.listening') : t('commands.start')}
+        </span>
+      </div>
+
+      <ul className="command-examples">
+        {COMMAND_NAMES.map((name) => (
+          <li key={name}>{t(`commands.examples.${name}`)}</li>
         ))}
       </ul>
+
       {events.length > 0 && (
         <div className="command-events" aria-live="polite">
-          {events.map((event, index) => (
-            <div key={`${event.at}-${index}`} className={`command-event ${event.kind}`}>
-              {event.kind === 'command' ? '✅' : '🎙️'} {COMMAND_LABELS[event.text] || event.text}
-              {event.phrase ? <em> — « {event.phrase} »</em> : null}
-            </div>
-          ))}
+          {events.map((event, index) =>
+            event.kind === 'command' ? (
+              <div key={index} className="command-event command">
+                {t('commands.executed', { command: t(`commands.examples.${event.command}`) })}
+              </div>
+            ) : (
+              <div key={index} className="command-event heard">
+                {event.text}
+              </div>
+            )
+          )}
         </div>
       )}
     </div>

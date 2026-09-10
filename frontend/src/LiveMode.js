@@ -2,13 +2,15 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getToken, wsUrl } from './api';
 import { MicPcmStream } from './audioStream';
+import Icon from './components/Icon';
+import Waveform from './components/Waveform';
 
 export default function LiveMode({ language, onSaved, onError }) {
   const { t } = useTranslation();
   const [state, setState] = useState('idle'); // idle | connecting | live | stopped
   const [committed, setCommitted] = useState('');
   const [partial, setPartial] = useState('');
-  const [info, setInfo] = useState('');
+  const [analyser, setAnalyser] = useState(null);
 
   const wsRef = useRef(null);
   const micRef = useRef(null);
@@ -16,6 +18,7 @@ export default function LiveMode({ language, onSaved, onError }) {
   const cleanup = () => {
     micRef.current?.stop();
     micRef.current = null;
+    setAnalyser(null);
   };
 
   useEffect(() => () => {
@@ -29,13 +32,11 @@ export default function LiveMode({ language, onSaved, onError }) {
     }
     cleanup();
     setState('stopped');
-    setInfo(t('live.stopped'));
   };
 
   const start = async () => {
     setCommitted('');
     setPartial('');
-    setInfo(t('live.starting'));
     setState('connecting');
 
     const mic = new MicPcmStream(
@@ -63,7 +64,6 @@ export default function LiveMode({ language, onSaved, onError }) {
       }
       if (message.type === 'ready') {
         setState('live');
-        setInfo(t('live.ready'));
       } else if (message.type === 'partial') {
         setPartial(message.text || '');
       } else if (message.type === 'final') {
@@ -72,8 +72,8 @@ export default function LiveMode({ language, onSaved, onError }) {
           setPartial('');
           onSaved?.(message.transcription);
         }
-        setInfo(t('live.saved'));
         setState('stopped');
+        cleanup();
       } else if (message.type === 'error') {
         onError(message.error);
         setState('idle');
@@ -81,15 +81,13 @@ export default function LiveMode({ language, onSaved, onError }) {
       }
     };
 
-    ws.onclose = () => {
-      cleanup();
-      setInfo((previous) => previous);
-    };
+    ws.onclose = () => cleanup();
 
     ws.onopen = async () => {
       mic.attachWebSocket(ws);
       try {
         await mic.start();
+        setAnalyser(mic.analyser);
       } catch {
         ws.close();
       }
@@ -97,30 +95,38 @@ export default function LiveMode({ language, onSaved, onError }) {
     micRef.current = mic;
   };
 
-  const busy = state === 'connecting' || state === 'live';
+  const isLive = state === 'live';
 
   return (
-    <div className="live-panel">
-      <p className="live-hint">{t('live.hint')}</p>
-      <div className="button-row">
-        {state === 'idle' || state === 'stopped' ? (
-          <button className="record-button" onClick={start}>
-            🔴 {t('live.start')}
-          </button>
-        ) : (
-          <button className="record-button stop" onClick={stop} disabled={state === 'connecting'}>
-            ⏹ {t('live.stop')}
-          </button>
-        )}
+    <div className="card live-panel fade-in">
+      <div className="waveform-frame">
+        <Waveform analyser={analyser} active={isLive} height={84} />
       </div>
 
-      {busy && (
-        <div className={`recorder-panel ${state === 'connecting' ? 'paused' : ''}`}>
-          {state === 'live' && <span className="recording-dot" aria-hidden="true"></span>}
-          <span className="recorder-state">{info}</span>
-        </div>
-      )}
-      {state === 'stopped' && <div className="result" aria-live="polite">{info}</div>}
+      <p className="hint">{t('live.hint')}</p>
+
+      <div className="record-stage">
+        {state === 'idle' || state === 'stopped' ? (
+          <button className="record-circle" onClick={start} aria-label={t('live.start')}>
+            <Icon name="live" size={30} />
+          </button>
+        ) : (
+          <button
+            className={`record-circle ${isLive ? 'recording' : ''}`}
+            onClick={stop}
+            disabled={state === 'connecting'}
+            aria-label={t('live.stop')}
+          >
+            <Icon name="stop" size={27} />
+          </button>
+        )}
+        <span className="record-caption">
+          {state === 'connecting' && t('live.starting')}
+          {isLive && t('live.ready')}
+          {state === 'stopped' && t('live.stopped')}
+          {state === 'idle' && t('live.start')}
+        </span>
+      </div>
 
       <div className="live-transcript" aria-live="polite">
         {committed && <p className="live-committed">{committed}</p>}

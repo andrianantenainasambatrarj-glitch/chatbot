@@ -1,698 +1,984 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import './i18n';
-import './styles.css';
-import { apiFetch, authApi, clearToken, getToken } from './api';
-import { stopSpeaking } from './speech';
+import {
+  authApi, getToken, clearToken,
+  transcribeFileApi, getJob, historyApi, deleteTranscriptionApi,
+  updateTranscriptionApi, exportWord, exportPdf, exportTxt, exportSrt,
+  sharedApi, sharedExportUrl, clearHistoryApi,
+} from './api';
+import { createStreamAnalyser } from './audioStream';
 import AuthScreen from './AuthScreen';
 import LiveMode from './LiveMode';
 import CommandMic from './CommandMic';
 import DashboardView from './DashboardView';
 import TranscriptionActions from './TranscriptionActions';
+import Icon from './components/Icon';
+import Waveform from './components/Waveform';
+import './i18n';
 
-const ACCEPTED_AUDIO = '.wav,.mp3,.m4a,.ogg,.oga,.webm,.mp4,.flac,.aac,.opus,audio/*';
+const MIC_TYPES = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'];
 
-function formatTime(totalSeconds) {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  const hours = Math.floor(s / 3600);
-  const minutes = Math.floor((s % 3600) / 60);
-  const seconds = s % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-    : `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+function preferredMime() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  return MIC_TYPES.find((type) => MediaRecorder.isTypeSupported?.(type)) || '';
 }
 
-function App() {
-  const { t, i18n } = useTranslation();
+function mimeExtension(mime) {
+  if (mime.includes('mp4')) return 'mp4';
+  if (mime.includes('ogg')) return 'ogg';
+  if (mime.includes('webm')) return 'webm';
+  return 'webm';
+}
 
-  const [user, setUser] = useState(null);
-  const [authChecking, setAuthChecking] = useState(!!getToken());
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
 
-  const [engines, setEngines] = useState([]);
-  const [engine, setEngine] = useState('vosk');
-  const [language, setLanguage] = useState('fr');
-  const [diarize, setDiarize] = useState(false);
-  const [tab, setTab] = useState('standard');
-
-  const [phase, setPhase] = useState('idle');
-  const [elapsed, setElapsed] = useState(0);
-  const [previewUrl, setPreviewUrl] = useState('');
-  const [job, setJob] = useState(null);
-
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState('');
-  const [history, setHistory] = useState([]);
-  const [current, setCurrent] = useState(null);
-  const [editedText, setEditedText] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
-
-  const mediaRecorderRef = useRef(null);
-  const streamRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const timerRef = useRef(null);
-  const previewUrlRef = useRef('');
-  const fileInputRef = useRef(null);
-  const pollRef = useRef(null);
-  const commandMicKeyRef = useRef(0);
-  const [commandMicKey, setCommandMicKey] = useState(0);
-
-  const mediaSupported =
-    typeof navigator !== 'undefined' &&
-    !!navigator.mediaDevices &&
-    typeof window.MediaRecorder !== 'undefined';
-
-  const showError = useCallback((message) => {
-    setError(message);
-    setStatus('');
-  }, []);
-
-  const handle401 = useCallback(() => {
-    clearToken();
-    setUser(null);
-  }, []);
-
-  const fetchHistory = useCallback(() => {
-    apiFetch('/api/transcriptions')
-      .then(setHistory)
-      .catch((err) => {
-        if (err.status === 401) handle401();
-        else console.error('Historique impossible :', err);
-      });
-  }, [handle401]);
-
-  const fetchEngines = useCallback(() => {
-    apiFetch('/api/engines').then(setEngines).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!getToken()) return undefined;
-    authApi
-      .me()
-      .then(setUser)
-      .catch(() => clearToken())
-      .finally(() => setAuthChecking(false));
-    return undefined;
-  }, []);
-
-  useEffect(() => {
-    if (user) {
-      fetchEngines();
-      fetchHistory();
-    }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [user, fetchEngines, fetchHistory]);
-
-  useEffect(() => () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    streamRef.current?.getTracks().forEach((tr) => tr.stop());
-    stopSpeaking();
-  }, []);
-
-  const activeEngineMeta = engines.find((meta) => meta.name === engine);
-  const languageOptions = activeEngineMeta?.languages || [{ code: 'fr', available: true }];
-
-  const setPreview = (blob) => {
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    const url = URL.createObjectURL(blob);
-    previewUrlRef.current = url;
-    setPreviewUrl(url);
-  };
-
-  const stopMicrophone = () => {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-  };
-
-  const logout = () => {
-    stopSpeaking();
-    clearToken();
-    setUser(null);
-  };
-
-  // ------------------------------------------------------------------
-  const startRecording = () => {
-    setError('');
-    setStatus('');
-    navigator.mediaDevices
-      .getUserMedia({ audio: true })
-      .then((stream) => {
-        streamRef.current = stream;
-        const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
-        const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || '';
-        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-        mediaRecorderRef.current = recorder;
-        audioChunksRef.current = [];
-
-        recorder.ondataavailable = (event) => {
-          if (event.data.size > 0) audioChunksRef.current.push(event.data);
-        };
-        recorder.onstop = () => {
-          stopMicrophone();
-          if (timerRef.current) clearInterval(timerRef.current);
-          setPreview(new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' }));
-          setPhase('review');
-        };
-
-        recorder.start();
-        setElapsed(0);
-        setPhase('recording');
-        timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
-      })
-      .catch((err) => {
-        stopMicrophone();
-        setPhase('idle');
-        if (err.name === 'NotAllowedError') showError(t('micDenied'));
-        else if (err.name === 'NotFoundError') showError(t('micNotFound'));
-        else showError(err.message);
-      });
-  };
-
-  const pauseRecording = () => {
-    mediaRecorderRef.current?.pause();
-    if (timerRef.current) clearInterval(timerRef.current);
-    setPhase('paused');
-  };
-
-  const resumeRecording = () => {
-    mediaRecorderRef.current?.resume();
-    timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
-    setPhase('recording');
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current.stop();
-  };
-
-  const discardRecording = () => {
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    previewUrlRef.current = '';
-    setPreviewUrl('');
-    setElapsed(0);
-    setPhase('idle');
-  };
-
-  const submitRecording = () => {
-    const blob = new Blob(audioChunksRef.current, {
-      type: mediaRecorderRef.current?.mimeType || 'audio/webm',
-    });
-    const mime = blob.type || 'audio/webm';
-    const ext = mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'webm';
-    sendAudio(blob, `enregistrement.${ext}`, false);
-  };
-
-  const onFileSelected = (event) => {
-    const file = event.target.files?.[0];
-    if (file) sendAudio(file, file.name, true);
-    event.target.value = '';
-  };
-
-  const sendAudio = (blobOrFile, filename, asyncMode) => {
-    setError('');
-    setStatus(asyncMode ? t('queued') : t('processing'));
-    setJob(null);
-    setPhase('processing');
-
-    const formData = new FormData();
-    formData.append('audio', blobOrFile, filename);
-    formData.append('engine', engine);
-    formData.append('language', language);
-    if (diarize) formData.append('diarize', '1');
-    if (asyncMode) formData.append('async', '1');
-
-    apiFetch('/api/transcribe', { method: 'POST', body: formData })
-      .then((data) => {
-        if (data.status && ['pending', 'processing'].includes(data.status)) {
-          setJob(data);
-          pollJob(data.id);
-        } else {
-          applyNewTranscription(data);
-          setPhase('idle');
-        }
-      })
-      .catch((err) => {
-        if (err.status === 401) handle401();
-        else showError(err.message);
-        setPhase('idle');
-      })
-      .finally(() => {
-        if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-        previewUrlRef.current = '';
-        setPreviewUrl('');
-        setElapsed(0);
-      });
-  };
-
-  const pollJob = (jobId) => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(() => {
-      apiFetch(`/api/jobs/${jobId}`)
-        .then((jobState) => {
-          setJob(jobState);
-          if (jobState.status === 'done') {
-            clearInterval(pollRef.current);
-            applyNewTranscription(jobState.transcription);
-            setPhase('idle');
-          } else if (jobState.status === 'error') {
-            clearInterval(pollRef.current);
-            showError(jobState.error || 'Échec de la tâche');
-            setPhase('idle');
-          }
-        })
-        .catch(() => {});
-    }, 1000);
-  };
-
-  const applyNewTranscription = (transcription) => {
-    setCurrent(transcription);
-    setEditedText(transcription.text);
-    setStatus(t('done'));
-    fetchHistory();
-  };
-
-  const openHistoryItem = async (item) => {
-    try {
-      const detail = await apiFetch(`/api/transcriptions/${item.id}`);
-      setCurrent(detail);
-      setEditedText(detail.text);
-      setTab('standard');
-      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-    } catch (err) {
-      showError(err.message);
-    }
-  };
-
-  // ------------------------------------------------------------------
-  const saveEdits = () => {
-    if (!current) return;
-    setIsSaving(true);
-    apiFetch(`/api/transcriptions/${current.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: editedText }),
-    })
-      .then((data) => {
-        setCurrent(data);
-        setStatus(t('editsSaved'));
-        fetchHistory();
-      })
-      .catch((err) => showError(err.message))
-      .finally(() => setIsSaving(false));
-  };
-
-  const deleteItem = (id) => {
-    apiFetch(`/api/transcriptions/${id}`, { method: 'DELETE' })
-      .then(() => {
-        if (current?.id === id) {
-          setCurrent(null);
-          setEditedText('');
-        }
-        fetchHistory();
-      })
-      .catch((err) => showError(err.message));
-  };
-
-  const clearHistory = () => {
-    if (!window.confirm(t('confirmClear'))) return;
-    apiFetch('/api/transcriptions', { method: 'DELETE' })
-      .then(() => {
-        setHistory([]);
-        setCurrent(null);
-        setEditedText('');
-        setStatus(t('historyCleared'));
-      })
-      .catch((err) => showError(err.message));
-  };
-
-  const exportUrl = (item, fmt) => item?.exports?.[fmt] || '';
-
-  const downloadExport = async (item, fmt) => {
-    const response = await fetch(exportUrl(item, fmt), {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${item.id}.${fmt}`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // ------------------------------------------------------------------
-  // Exécution des commandes vocales
-  // ------------------------------------------------------------------
-  const handleVoiceCommand = useCallback((command) => {
-    const restartCommandMic = () => {
-      commandMicKeyRef.current += 1;
-      setCommandMicKey(commandMicKeyRef.current);
-    };
-    switch (command) {
-      case 'new_recording':
-        setTab('standard');
-        discardRecording();
-        setTimeout(startRecording, 200);
-        break;
-      case 'live_mode': setTab('live'); break;
-      case 'standard_mode': setTab('standard'); break;
-      case 'dashboard': setTab('dashboard'); break;
-      case 'history': setTab('standard'); break;
-      case 'dark_mode': setDarkMode(true); break;
-      case 'light_mode': setDarkMode(false); break;
-      case 'language_french': i18n.changeLanguage('fr'); setLanguage('fr'); break;
-      case 'language_english': i18n.changeLanguage('en'); setLanguage('en'); break;
-      case 'logout': logout(); break;
-      case 'clear_history': clearHistory(); break;
-      case 'download_word':
-        if (current) downloadExport(current, 'word').catch(showError);
-        break;
-      case 'download_pdf':
-        if (current) downloadExport(current, 'pdf').catch(showError);
-        break;
-      case 'insights':
-        setTab('standard');
-        break;
-      case 'listen':
-        if (current) import('./speech').then((module) => module.speak(current.text, language));
-        break;
-      default:
-        break;
-    }
-    restartCommandMic();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, language, i18n]);
-
-  // ------------------------------------------------------------------
-  if (authChecking) {
-    return <div className="app"><div className="centered-loader"><div className="loader"></div></div></div>;
-  }
-  if (!user) {
-    return (
-      <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
-        <LanguageSwitch i18n={i18n} />
-        <AuthScreen onAuthed={(authedUser) => { setUser(authedUser); fetchEngines(); fetchHistory(); }} />
-      </div>
-    );
-  }
-
-  const busy = phase === 'processing';
-  const exportLabel = (fmt) =>
-    ({
-      docx: `📄 ${t('exportWord')}`,
-      pdf: `📕 ${t('exportPdf')}`,
-      txt: `📝 ${t('exportTxt')}`,
-      srt: `💬 ${t('exportSrt')}`,
-    }[fmt]);
-
+function ExportChips({ item, t }) {
   return (
-    <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
-      <a href="#main" className="skip-link">Aller au contenu</a>
-      <header className="header">
-        <h1 className="title">Chatbot Vocal</h1>
-        <div className="header-actions">
-          <LanguageSwitch i18n={i18n} />
-          <button className="theme-toggle" onClick={() => setDarkMode(!darkMode)} aria-pressed={darkMode}>
-            {darkMode ? '☀️' : '🌙'}
-          </button>
-          <span className="user-email" title={user.email}>{user.email}</span>
-          {user.role === 'admin' && <span className="admin-badge">ADMIN</span>}
-          <button className="secondary-button small" onClick={logout}>{t('auth.logout')}</button>
-        </div>
-      </header>
-
-      <main id="main" className="main-content">
-        <div className="selectors">
-          <label className="selector">
-            <span>{t('engine')}</span>
-            <select
-              value={engine}
-              onChange={(e) => {
-                setEngine(e.target.value);
-                if (e.target.value === 'whisper') setTab('standard');
-              }}
-            >
-              {engines.length === 0 && <option value="vosk">{t('vosk')}</option>}
-              {engines.map((meta) => (
-                <option key={meta.name} value={meta.name}>{meta.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="selector">
-            <span>{t('language')}</span>
-            <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-              {languageOptions.map((lang) => (
-                <option key={lang.code} value={lang.code} disabled={!lang.available}>
-                  {lang.code.toUpperCase()}
-                  {lang.available ? '' : ' (modèle absent)'}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="selector checkbox-selector">
-            <span>{t('diarize')}</span>
-            <input
-              type="checkbox"
-              checked={diarize}
-              onChange={(e) => setDiarize(e.target.checked)}
-            />
-          </label>
-        </div>
-
-        <div className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'standard'}
-            className={`tab ${tab === 'standard' ? 'active' : ''}`}
-            onClick={() => setTab('standard')}>🎙️ {t('modeStandard')}</button>
-          <button role="tab" aria-selected={tab === 'live'}
-            className={`tab ${tab === 'live' ? 'active' : ''}`}
-            onClick={() => setTab('live')} disabled={engine === 'whisper'}
-            title={engine === 'whisper' ? t('live.unsupported') : ''}>
-            📡 {t('modeLive')}
-          </button>
-          <button role="tab" aria-selected={tab === 'commands'}
-            className={`tab ${tab === 'commands' ? 'active' : ''}`}
-            onClick={() => setTab('commands')} disabled={engine === 'whisper'}>
-            🗣️ {t('modeCommands')}
-          </button>
-          <button role="tab" aria-selected={tab === 'dashboard'}
-            className={`tab ${tab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setTab('dashboard')}>📊 {t('modeDashboard')}</button>
-        </div>
-
-        {error && <div className="error-message" role="alert">⚠️ {error}</div>}
-
-        {tab === 'live' && (
-          <LiveMode
-            language={language}
-            onError={showError}
-            onSaved={(transcription) => { applyNewTranscription(transcription); setStatus(t('live.saved')); }}
-          />
-        )}
-
-        {tab === 'commands' && (
-          <CommandMic
-            key={commandMicKey}
-            language={language}
-            onError={showError}
-            onCommand={handleVoiceCommand}
-          />
-        )}
-
-        {tab === 'dashboard' && <DashboardView user={user} />}
-
-        {tab === 'standard' && (
-          <section className="controls">
-            <p className="subtitle">{t('tagline')}</p>
-
-            <div className="instruction-card">
-              <h3>{t('instructionsTitle')}</h3>
-              <ul>
-                <li>{t('instructions.one')}</li>
-                <li>{t('instructions.two')}</li>
-                <li>{t('instructions.three')}</li>
-              </ul>
-            </div>
-
-            {(phase === 'recording' || phase === 'paused') && (
-              <div className={`recorder-panel ${phase === 'paused' ? 'paused' : ''}`}>
-                <span className="recording-dot" aria-hidden="true"></span>
-                <span className="timer">{formatTime(elapsed)}</span>
-                <span className="recorder-state">{phase === 'paused' ? t('pausedState') : t('recordingState')}</span>
-              </div>
-            )}
-
-            <div className="button-row">
-              {phase === 'idle' && (
-                <button className="record-button" onClick={startRecording} disabled={!mediaSupported || busy}>
-                  🎙️ {t('record')}
-                </button>
-              )}
-              {phase === 'recording' && (
-                <>
-                  <button className="secondary-button" onClick={pauseRecording}>⏸ {t('pause')}</button>
-                  <button className="record-button stop" onClick={stopRecording}>⏹ {t('stop')}</button>
-                </>
-              )}
-              {phase === 'paused' && (
-                <>
-                  <button className="record-button" onClick={resumeRecording}>▶️ {t('resume')}</button>
-                  <button className="record-button stop" onClick={stopRecording}>⏹ {t('stop')}</button>
-                </>
-              )}
-            </div>
-
-            {phase === 'review' && previewUrl && (
-              <div className="review-card">
-                <h3>{t('reviewTitle')}</h3>
-                <p className="review-hint">{t('reviewHint')}</p>
-                <audio src={previewUrl} controls className="audio-player" />
-                <div className="button-row">
-                  <button className="record-button" onClick={submitRecording} disabled={busy}>
-                    ✅ {t('transcribe')}
-                  </button>
-                  <button className="secondary-button danger-outline" onClick={discardRecording} disabled={busy}>
-                    ❌ {t('rerecord')}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {phase === 'processing' && (
-              <>
-                <div className="loader" role="status" aria-label={t('processing')}></div>
-                {job && (
-                  <div className="job-progress">
-                    <div className="progress-bar">
-                      <div className="progress-fill" style={{ width: `${job.progress || 0}%` }}></div>
-                    </div>
-                    <p>{t('jobProgress', { progress: job.progress || 0 })} — {job.message}</p>
-                  </div>
-                )}
-              </>
-            )}
-
-            {phase === 'idle' && (
-              <div className="upload-zone">
-                <label className="upload-label">
-                  📁 {t('orUpload')}
-                  <input ref={fileInputRef} type="file" accept={ACCEPTED_AUDIO} onChange={onFileSelected} hidden />
-                </label>
-              </div>
-            )}
-
-            {!mediaSupported && <p className="error-message">{t('micUnsupported')}</p>}
-          </section>
-        )}
-
-        <div className="result" aria-live="polite">{status}</div>
-
-        {current && (
-          <div className="transcription-card" id="current-transcription">
-            <h3>
-              {t('transcriptionTitle')}
-              {current.duration_seconds
-                ? ` · ${t('duration', { time: formatTime(Math.round(current.duration_seconds)) })}`
-                : ''}
-              {' '}· {current.engine} · {current.language.toUpperCase()}
-              {current.diarized ? ` · ${current.speakers?.length || 0} 🎤` : ''}
-            </h3>
-            {current.diarized && current.speakers ? (
-              <div className="speakers">
-                {current.speakers.map((turn, index) => (
-                  <p key={index} className={`speaker-turn speaker-${turn.speaker}`}>
-                    <strong>{t('speaker', { n: turn.speaker })} :</strong> {turn.text}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              <textarea
-                className="transcription-editor"
-                value={editedText}
-                onChange={(e) => setEditedText(e.target.value)}
-                rows={Math.min(12, Math.max(4, editedText.split('\n').length))}
-                aria-label={t('transcriptionTitle')}
-              />
-            )}
-            <div className="button-row wrap">
-              {!current.diarized && (
-                <button
-                  className="secondary-button"
-                  onClick={saveEdits}
-                  disabled={isSaving || editedText.trim() === current.text}
-                >
-                  💾 {t('saveEdits')}
-                </button>
-              )}
-              {['docx', 'pdf', 'txt', ...(current.has_timestamps ? ['srt'] : [])].map((fmt) => (
-                <button
-                  key={fmt}
-                  className={`export-button ${fmt}`}
-                  onClick={() => downloadExport(current, fmt).catch(showError)}
-                >
-                  {exportLabel(fmt)}
-                </button>
-              ))}
-            </div>
-            <TranscriptionActions transcription={current} language={language} />
-          </div>
-        )}
-
-        <button className="clear-history" onClick={clearHistory} disabled={history.length === 0 || busy}>
-          🗑️ {t('clearHistory')}
+    <div className="export-row" style={{ marginTop: 14 }}>
+      <button className="export-chip" onClick={() => exportWord(item.id)}>
+        <Icon name="fileText" size={16} /> {t('exportWord')}
+      </button>
+      <button className="export-chip" onClick={() => exportPdf(item.id)}>
+        <Icon name="fileText" size={16} /> {t('exportPdf')}
+      </button>
+      <button className="export-chip" onClick={() => exportTxt(item.id)}>
+        <Icon name="fileText" size={16} /> {t('exportTxt')}
+      </button>
+      {item.has_timestamps && (
+        <button className="export-chip" onClick={() => exportSrt(item.id)}>
+          <Icon name="fileText" size={16} /> {t('exportSrt')}
         </button>
-
-        {history.length > 0 && (
-          <section className="history-section" aria-label={t('historyTitle', { count: history.length })}>
-            <h2>{t('historyTitle', { count: history.length })}</h2>
-            <div className="history-grid">
-              {history.map((item) => (
-                <div key={item.id} className="history-card">
-                  <div className="history-card-head">
-                    <strong>{new Date(item.created_at).toLocaleString()}</strong>
-                    <button className="icon-button" title="✕" onClick={() => deleteItem(item.id)}>✕</button>
-                  </div>
-                  <p className="history-meta">
-                    {item.engine} · {item.language.toUpperCase()}
-                    {item.duration_seconds ? ` · ${formatTime(Math.round(item.duration_seconds))}` : ''}
-                    {item.diarized ? ' · 🎤' : ''}
-                  </p>
-                  <p className="history-text">{item.text}</p>
-                  <div className="history-exports">
-                    <button className="open-item" onClick={() => openHistoryItem(item)}>📂</button>
-                    {['docx', 'pdf', 'txt', ...(item.has_timestamps ? ['srt'] : [])].map((fmt) => (
-                      <button key={fmt} onClick={() => downloadExport(item, fmt).catch(showError)}>
-                        {fmt.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-      </main>
+      )}
     </div>
   );
 }
 
-function LanguageSwitch({ i18n }) {
+function SpeakerTurns({ item, t }) {
   return (
-    <select
-      className="language-switch"
-      aria-label="Language / Langue"
-      value={i18n.language?.startsWith('en') ? 'en' : 'fr'}
-      onChange={(e) => {
-        i18n.changeLanguage(e.target.value);
-        localStorage.setItem('cv_lang', e.target.value);
-      }}
-    >
-      <option value="fr">FR</option>
-      <option value="en">EN</option>
-    </select>
+    <div className="speakers">
+      {item.speakers.map((sp, i) => (
+        <p key={i} className={`speaker-turn speaker-${((sp.speaker - 1) % 2) + 1}`}>
+          <strong>{t('speaker', { n: sp.speaker })}</strong>
+          {sp.text}
+        </p>
+      ))}
+    </div>
   );
 }
 
-export default App;
+function ResultCard({
+  item, insights, setInsights, chats, setChats,
+  openPanel, setOpenPanel, notify, onError, onRemove, t,
+}) {
+  const [edited, setEdited] = useState(item.text || '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setEdited(item.text || ''), [item.text]);
+
+  const saveEdits = async () => {
+    setSaving(true);
+    try {
+      const updated = await updateTranscriptionApi(item.id, edited);
+      setEdited(updated.text || edited);
+      notify(t('editsSaved'));
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="transcription-head">
+        <div>
+          <h3>{t('transcriptionTitle')}</h3>
+          <div className="transcription-meta">
+            <span className="meta-chip engine">{t(item.engine === 'whisper' ? 'whisper' : 'vosk')}</span>
+            {item.duration_seconds
+              ? <span className="meta-chip">{t('duration', { time: Math.round(item.duration_seconds) })}</span>
+              : null}
+            {item.diarized && <span className="meta-chip">{t('diarizedChip')}</span>}
+            {item.created_at && (
+              <span className="meta-chip">{new Date(item.created_at).toLocaleString()}</span>
+            )}
+          </div>
+        </div>
+        {onRemove && (
+          <button
+            className="icon-btn danger"
+            title={t('history.deleteOne')}
+            aria-label={t('history.deleteOne')}
+            onClick={() => onRemove(item.id)}
+          >
+            <Icon name="trash" size={17} />
+          </button>
+        )}
+      </div>
+
+      {item.speakers?.length ? (
+        <SpeakerTurns item={item} t={t} />
+      ) : (
+        <textarea
+          className="editor"
+          rows={10}
+          value={edited}
+          onChange={(e) => setEdited(e.target.value)}
+        />
+      )}
+
+      {edited !== item.text && !item.speakers?.length && (
+        <button className="btn btn-secondary btn-sm" onClick={saveEdits} disabled={saving}>
+          {saving ? <span className="loader sm" /> : <Icon name="check" size={15} />}
+          {t('saveEdits')}
+        </button>
+      )}
+
+      <ExportChips item={item} t={t} />
+
+      <div className="actions-bar" style={{ borderTop: 'none', paddingTop: 4 }}>
+        <TranscriptionActions
+          item={item}
+          insights={insights}
+          setInsights={(data) => setInsights(data)}
+          chatMessages={chats}
+          setChatMessages={setChats}
+          openPanel={openPanel}
+          setOpenPanel={setOpenPanel}
+          notify={notify}
+          onError={onError}
+        />
+      </div>
+    </div>
+  );
+}
+
+function HistoryList({ items, expandedId, setExpandedId, cardProps, t, onRemove }) {
+  if (!items?.length) {
+    return (
+      <div className="empty-state">
+        <Icon name="fileText" size={34} />
+        <p>{t('history.empty')}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="history-grid">
+      {items.map((item) => (
+        <article className="history-card" key={item.id}>
+          {expandedId === item.id ? (
+            <ResultCard item={item} {...cardProps(item)} onRemove={onRemove} t={t} />
+          ) : (
+            <>
+              <div className="history-card-head">
+                <span className="history-date">{new Date(item.created_at).toLocaleString()}</span>
+                <button
+                  className="icon-btn danger"
+                  style={{ width: 28, height: 28 }}
+                  aria-label={t('history.deleteOne')}
+                  onClick={() => onRemove(item.id)}
+                >
+                  <Icon name="trash" size={15} />
+                </button>
+              </div>
+              <span className="meta-chip engine" style={{ alignSelf: 'flex-start' }}>
+                {t(item.engine === 'whisper' ? 'whisper' : 'vosk')}
+              </span>
+              <p className="history-text">{item.text}</p>
+              <div className="history-meta">
+                {item.duration_seconds
+                  ? <span className="meta-chip">{t('duration', { time: Math.round(item.duration_seconds) })}</span>
+                  : null}
+              </div>
+              <div className="history-exports">
+                <button onClick={() => exportWord(item.id)}>W</button>
+                <button onClick={() => exportPdf(item.id)}>PDF</button>
+                <button onClick={() => exportTxt(item.id)}>TXT</button>
+                {item.has_timestamps && <button onClick={() => exportSrt(item.id)}>SRT</button>}
+                <button
+                  style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                  onClick={() => setExpandedId(item.id)}
+                >
+                  {t('history.more')} <Icon name="chevronDown" size={13} />
+                </button>
+              </div>
+            </>
+          )}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+export default function App() {
+  const { t, i18n } = useTranslation();
+
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const [view, setView] = useState(() =>
+    window.location.pathname.startsWith('/shared/') ? 'shared' : 'studio'
+  );
+  const [sharedToken] = useState(() =>
+    window.location.pathname.startsWith('/shared/')
+      ? window.location.pathname.split('/shared/')[1]?.split('/')[0]
+      : null
+  );
+  const [shared, setShared] = useState(null);
+
+  const [engine, setEngine] = useState(() => localStorage.getItem('cv_engine') || 'vosk');
+  const [language, setLanguage] = useState(() => localStorage.getItem('cv_lang') || 'fr');
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('cv_theme') === 'dark');
+  const [diarize, setDiarize] = useState(false);
+
+  const [recorderState, setRecorderState] = useState('idle');
+  const [elapsed, setElapsed] = useState(0);
+  const [recordAnalyser, setRecordAnalyser] = useState(null);
+  const [draft, setDraft] = useState(null); // { blobUrl, blob, fileName }
+
+  const [uploadKey, setUploadKey] = useState(0);
+  const [job, setJob] = useState(null);
+  const [lastResult, setLastResult] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [expandedId, setExpandedId] = useState(null);
+
+  const [insightsById, setInsightsById] = useState({});
+  const [chatsById, setChatsById] = useState({});
+  const [openPanel, setOpenPanel] = useState(null);
+
+  const [error, setError] = useState('');
+  const [toast, setToast] = useState('');
+
+  const recorderRef = useRef(null);
+  const streamRef = useRef(null);
+  const analyserHandleRef = useRef(null);
+  const startStampRef = useRef(0);
+  const elapsedBeforeRef = useRef(0);
+
+  const notify = useCallback((message) => {
+    setToast(message);
+    setTimeout(() => setToast(''), 3000);
+  }, []);
+
+  /* ---------- session ---------- */
+  useEffect(() => {
+    if (view === 'shared') {
+      setLoading(false);
+      sharedApi(sharedToken)
+        .then(setShared)
+        .catch(() => setShared({ error: 'notFound' }));
+      return;
+    }
+    if (!getToken()) {
+      setLoading(false);
+      return;
+    }
+    authApi.me()
+      .then((data) => setUser(data.user))
+      .catch(() => clearToken())
+      .finally(() => setLoading(false));
+  }, [view, sharedToken]);
+
+  useEffect(() => {
+    document.body.classList.toggle('dark-mode', darkMode);
+    localStorage.setItem('cv_theme', darkMode ? 'dark' : 'light');
+  }, [darkMode]);
+
+  useEffect(() => {
+    i18n.changeLanguage(language);
+    localStorage.setItem('cv_lang', language);
+  }, [language, i18n]);
+
+  useEffect(() => {
+    localStorage.setItem('cv_engine', engine);
+  }, [engine]);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistory(await historyApi());
+    } catch { /* vue dédiée affiche l'état vide */ }
+  }, []);
+
+  useEffect(() => {
+    if (user) loadHistory();
+  }, [user, loadHistory]);
+
+  /* ---------- minuteur ---------- */
+  useEffect(() => {
+    if (recorderState !== 'recording') return undefined;
+    const id = setInterval(() => {
+      setElapsed(elapsedBeforeRef.current + (Date.now() - startStampRef.current) / 1000);
+    }, 250);
+    return () => clearInterval(id);
+  }, [recorderState]);
+
+  /* ---------- polling tâche ---------- */
+  useEffect(() => {
+    if (!job || job.status === 'done' || job.status === 'error') return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const fresh = await getJob(job.id);
+        if (cancelled) return;
+        setJob(fresh);
+        if (fresh.status === 'done' && fresh.transcription) {
+          setLastResult(fresh.transcription);
+          setInsightsById((prev) => ({ ...prev, [fresh.transcription.id]: null }));
+          setChatsById((prev) => ({ ...prev, [fresh.transcription.id]: [] }));
+          setOpenPanel(null);
+          notify(t('done'));
+          loadHistory();
+        }
+      } catch (err) {
+        if (!cancelled) setJob((prev) => ({ ...prev, status: 'error', error: err.message }));
+      }
+    };
+    const id = setInterval(poll, 900);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [job, t, notify, loadHistory]);
+
+  useEffect(() => {
+    const onEsc = (e) => { if (e.key === 'Escape') setError(''); };
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, []);
+
+  /* ---------- enregistrement ---------- */
+  const teardownMic = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    analyserHandleRef.current?.stop();
+    analyserHandleRef.current = null;
+    setRecordAnalyser(null);
+  };
+
+  const startRecording = async () => {
+    setError('');
+    setLastResult(null);
+    setJob(null);
+    setDraft(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError(t('micUnsupported'));
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+      streamRef.current = stream;
+      const analyserHandle = createStreamAnalyser(stream);
+      analyserHandleRef.current = analyserHandle;
+      setRecordAnalyser(analyserHandle?.analyser || null);
+
+      const chunks = [];
+      const mime = preferredMime();
+      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = () => {
+        const type = recorder.mimeType || mime || 'audio/webm';
+        const blob = new Blob(chunks, { type });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const fileName = `enregistrement-${stamp}.${mimeExtension(type)}`;
+        setDraft({ blob, blobUrl: URL.createObjectURL(blob), fileName });
+        teardownMic();
+        setRecorderState('idle');
+      };
+      recorder.start(300);
+      recorderRef.current = recorder;
+      elapsedBeforeRef.current = 0;
+      startStampRef.current = Date.now();
+      setElapsed(0);
+      setRecorderState('recording');
+    } catch (err) {
+      teardownMic();
+      if (err.name === 'NotAllowedError') setError(t('micDenied'));
+      else if (err.name === 'NotFoundError') setError(t('micNotFound'));
+      else setError(err.message);
+    }
+  };
+
+  const pauseRecording = () => {
+    recorderRef.current?.pause();
+    elapsedBeforeRef.current += (Date.now() - startStampRef.current) / 1000;
+    setRecorderState('paused');
+  };
+
+  const resumeRecording = () => {
+    recorderRef.current?.resume();
+    startStampRef.current = Date.now();
+    setRecorderState('recording');
+  };
+
+  const stopRecording = () => {
+    if (recorderRef.current?.state !== 'inactive') recorderRef.current?.stop();
+  };
+
+  const discardDraft = () => {
+    if (draft?.blobUrl) URL.revokeObjectURL(draft.blobUrl);
+    setDraft(null);
+    setUploadKey((k) => k + 1);
+  };
+
+  const onFileSelected = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError('');
+    setLastResult(null);
+    setJob(null);
+    setDraft({ blob: file, blobUrl: URL.createObjectURL(file), fileName: file.name });
+  };
+
+  const transcribeDraft = async () => {
+    if (!draft) return;
+    try {
+      const data = await transcribeFileApi(draft.blob, draft.fileName, {
+        engine,
+        language,
+        diarize,
+      });
+      setJob({ id: data.id, status: data.status || 'pending', progress: 0 });
+      if (draft.blobUrl) URL.revokeObjectURL(draft.blobUrl);
+      setDraft(null);
+      setUploadKey((k) => k + 1);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  /* ---------- historique ---------- */
+  const removeItem = async (id) => {
+    try {
+      await deleteTranscriptionApi(id);
+      setHistory((items) => items.filter((it) => it.id !== id));
+      if (lastResult?.id === id) setLastResult(null);
+      notify(t('history.deleted'));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const clearHistory = async () => {
+    if (!window.confirm(t('confirmClear'))) return;
+    try {
+      await clearHistoryApi();
+      setHistory([]);
+      setLastResult(null);
+      setExpandedId(null);
+      notify(t('historyCleared'));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  /* ---------- commandes vocales ---------- */
+  const readAloud = (text) => {
+    if (!('speechSynthesis' in window) || !text) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = language === 'fr' ? 'fr-FR' : 'en-US';
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const handleVoiceCommand = (command) => {
+    if (!command) return;
+    switch (command) {
+      case 'new_recording':
+      case 'standard_mode':
+        setView('studio');
+        discardDraft();
+        break;
+      case 'live_mode':
+        setView('direct');
+        break;
+      case 'dashboard':
+        setView('dashboard');
+        break;
+      case 'history':
+        setView('history');
+        break;
+      case 'dark_mode':
+        setDarkMode(true);
+        break;
+      case 'light_mode':
+        setDarkMode(false);
+        break;
+      case 'logout':
+        handleLogout();
+        break;
+      case 'clear_history':
+        clearHistory();
+        break;
+      case 'download_word':
+        if (lastResult) exportWord(lastResult.id);
+        break;
+      case 'download_pdf':
+        if (lastResult) exportPdf(lastResult.id);
+        break;
+      case 'insights':
+        setView('studio');
+        if (lastResult) setOpenPanel('insights');
+        break;
+      case 'listen':
+        readAloud(lastResult?.text);
+        break;
+      case 'language_english':
+        setLanguage('en');
+        break;
+      case 'language_french':
+        setLanguage('fr');
+        break;
+      default:
+        break;
+    }
+  };
+
+  const handleAuthed = (dataUser) => {
+    setUser(dataUser);
+    loadHistory();
+  };
+
+  const handleLogout = () => {
+    clearToken();
+    setUser(null);
+    setHistory([]);
+    setLastResult(null);
+  };
+
+  /* ---------- page publique de partage ---------- */
+  if (view === 'shared') {
+    return (
+      <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
+        <main className="page" style={{ maxWidth: 760 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+            <span className="brand" style={{ padding: 0 }}>
+              <span className="brand-mark"><Icon name="waveform" size={20} /></span>
+              <span className="brand-name">Chatbot Vocal</span>
+            </span>
+          </div>
+          {!shared ? (
+            <div className="loader" />
+          ) : shared.error ? (
+            <div className="empty-state">
+              <Icon name="link" size={34} />
+              <p>{t('shared.notFound')}</p>
+            </div>
+          ) : (
+            <div className="card fade-in">
+              <h2 style={{ marginBottom: 10 }}>{t('transcriptionTitle')}</h2>
+              <div className="transcription-meta" style={{ marginBottom: 14 }}>
+                {shared.duration_seconds
+                  ? <span className="meta-chip">{t('duration', { time: Math.round(shared.duration_seconds) })}</span>
+                  : null}
+                <span className="meta-chip engine">{t(shared.engine === 'whisper' ? 'whisper' : 'vosk')}</span>
+                {shared.created_at && (
+                  <span className="meta-chip">{new Date(shared.created_at).toLocaleString()}</span>
+                )}
+              </div>
+              {shared.speakers?.length ? (
+                <SpeakerTurns item={shared} t={t} />
+              ) : (
+                <p style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{shared.text}</p>
+              )}
+              <div className="export-row" style={{ marginTop: 16 }}>
+                <a className="export-chip" href={sharedExportUrl(sharedToken, 'docx')}>
+                  <Icon name="fileText" size={16} /> {t('exportWord')}
+                </a>
+                <a className="export-chip" href={sharedExportUrl(sharedToken, 'pdf')}>
+                  <Icon name="fileText" size={16} /> {t('exportPdf')}
+                </a>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
+        <div className="centered-loader"><span className="loader" /></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
+        <div className="auth-top-controls">
+          <select
+            className="language-select"
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            aria-label={t('language')}
+          >
+            <option value="fr">FR</option>
+            <option value="en">EN</option>
+          </select>
+          <button
+            className="theme-toggle"
+            onClick={() => setDarkMode(!darkMode)}
+            aria-label="Thème"
+          >
+            <Icon name={darkMode ? 'sun' : 'moon'} size={17} />
+          </button>
+        </div>
+        <AuthScreen onAuthed={handleAuthed} />
+      </div>
+    );
+  }
+
+  const navItems = [
+    { id: 'studio', icon: 'mic', label: t('nav.studio') },
+    { id: 'direct', icon: 'live', label: t('nav.direct') },
+    { id: 'commands', icon: 'command', label: t('nav.commands') },
+    { id: 'history', icon: 'folder', label: t('nav.history') },
+    { id: 'dashboard', icon: 'dashboard', label: t('nav.dashboard') },
+  ];
+
+  const cardProps = {
+    notify,
+    onError: setError,
+    insights: lastResult ? insightsById[lastResult.id] : null,
+    setInsights: (data) =>
+      setInsightsById((prev) => ({ ...prev, [lastResult.id]: data })),
+    chats: lastResult ? chatsById[lastResult.id] || [] : [],
+    setChats: (updater) =>
+      setChatsById((prev) => {
+        const current = prev[lastResult.id] || [];
+        return { ...prev, [lastResult.id]: typeof updater === 'function' ? updater(current) : updater };
+      }),
+    openPanel,
+    setOpenPanel,
+  };
+
+  const historyCardProps = (item) => ({
+    notify,
+    onError: setError,
+    insights: insightsById[item.id] || null,
+    setInsights: (data) => setInsightsById((prev) => ({ ...prev, [item.id]: data })),
+    chats: chatsById[item.id] || [],
+    setChats: (next) =>
+      setChatsById((prev) => ({
+        ...prev,
+        [item.id]: typeof next === 'function' ? next(prev[item.id] || []) : next,
+      })),
+    openPanel: expandedId === item.id ? openPanel : null,
+    setOpenPanel,
+  });
+
+  const initials = (user.email || '?').slice(0, 2);
+
+  return (
+    <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
+      <div className="shell">
+        <aside className="sidebar">
+          <span className="brand">
+            <span className="brand-mark"><Icon name="waveform" size={21} /></span>
+            <span>
+              <span className="brand-name">Chatbot Vocal</span>
+              <span className="brand-tag">{t('brandTag')}</span>
+            </span>
+          </span>
+
+          <nav className="nav" aria-label="Navigation principale">
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                className={`nav-item ${view === item.id ? 'active' : ''}`}
+                onClick={() => setView(item.id)}
+              >
+                <Icon name={item.icon} size={19} />
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="sidebar-spacer" />
+
+          <div className="sidebar-user">
+            <div className="user-line">
+              <span className="avatar">{initials}</span>
+              <div className="user-meta">
+                <span className="user-email">{user.email}</span>
+                {user.role === 'admin' && <span className="user-role">{t('adminBadge')}</span>}
+              </div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={handleLogout}>
+              <Icon name="logout" size={15} /> {t('auth.logout')}
+            </button>
+          </div>
+        </aside>
+
+        <div className="content">
+          <header className="topbar">
+            <span className="mobile-brand">
+              <span className="brand-mark"><Icon name="waveform" size={18} /></span>
+              <span className="brand-name">Chatbot Vocal</span>
+            </span>
+            <div className="view-title">
+              <h1>{navItems.find((n) => n.id === view)?.label}</h1>
+            </div>
+            <div className="topbar-actions">
+              <select
+                className="language-select"
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                aria-label={t('language')}
+              >
+                <option value="fr">FR</option>
+                <option value="en">EN</option>
+              </select>
+              <button
+                className="theme-toggle"
+                onClick={() => setDarkMode(!darkMode)}
+                aria-label="Thème"
+                title={darkMode ? t('theme.light') : t('theme.dark')}
+              >
+                <Icon name={darkMode ? 'sun' : 'moon'} size={17} />
+              </button>
+              <button className="icon-btn" onClick={handleLogout} title={t('auth.logout')}>
+                <Icon name="logout" size={17} />
+              </button>
+            </div>
+          </header>
+
+          <main className="page">
+            {error && (
+              <div className="alert" role="alert" style={{ marginBottom: 16 }}>
+                <Icon name="x" size={16} />
+                <span style={{ flex: 1 }}>{error}</span>
+                <button className="icon-btn" onClick={() => setError('')} aria-label="Fermer">
+                  <Icon name="x" size={15} />
+                </button>
+              </div>
+            )}
+            {toast && (
+              <div className="toast"><Icon name="check" size={15} /> {toast}</div>
+            )}
+
+            {view === 'studio' && (
+              <div className="studio fade-in">
+                <div className="page-head" style={{ marginBottom: 4 }}>
+                  <h2>{t('studio.title')}</h2>
+                  <p>{t('studio.subtitle')}</p>
+                </div>
+
+                <div className="toolbar">
+                  <label className="field">
+                    <span>{t('engine')}</span>
+                    <select value={engine} onChange={(e) => setEngine(e.target.value)}>
+                      <option value="vosk">{t('vosk')}</option>
+                      <option value="whisper">{t('whisper')}</option>
+                    </select>
+                  </label>
+                  <label className="field checkbox-field">
+                    <input type="checkbox" checked={diarize} onChange={(e) => setDiarize(e.target.checked)} />
+                    {t('diarize')}
+                  </label>
+                </div>
+
+                <div className="card">
+                  <div className="waveform-frame" style={{ marginBottom: 16 }}>
+                    <Waveform analyser={recordAnalyser} active={recorderState === 'recording'} height={78} />
+                  </div>
+
+                  {draft ? (
+                    <div>
+                      <div className="record-stage">
+                        <span className="timer-chip">
+                          <Icon name="fileText" size={16} />
+                          {draft.fileName}
+                        </span>
+                        <audio className="audio-player" controls src={draft.blobUrl} />
+                        <div className="review-actions">
+                          <button className="btn btn-secondary" onClick={discardDraft}>
+                            <Icon name="trash" size={16} /> {t('discard')}
+                          </button>
+                          <button className="btn btn-primary" onClick={transcribeDraft}>
+                            <Icon name="sparkles" size={16} /> {t('transcribe')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="record-stage">
+                        {recorderState !== 'idle' && (
+                          <span className="timer-chip">
+                            <span className={`live-dot ${recorderState === 'paused' ? 'paused' : ''}`} />
+                            {formatTime(elapsed)}
+                          </span>
+                        )}
+
+                        <div className="record-controls">
+                          {(recorderState === 'recording' || recorderState === 'paused') && (
+                            <button
+                              className="btn btn-secondary"
+                              onClick={recorderState === 'paused' ? resumeRecording : pauseRecording}
+                            >
+                              <Icon name={recorderState === 'paused' ? 'play' : 'pause'} size={17} />
+                              {recorderState === 'paused' ? t('resume') : t('pause')}
+                            </button>
+                          )}
+
+                          {recorderState === 'idle' ? (
+                            <button className="record-circle" onClick={startRecording} aria-label={t('record')}>
+                              <Icon name="mic" size={31} />
+                            </button>
+                          ) : (
+                            <button
+                              className={`record-circle ${recorderState === 'recording' ? 'recording' : ''}`}
+                              onClick={stopRecording}
+                              aria-label={t('stop')}
+                            >
+                              <Icon name="stop" size={27} />
+                            </button>
+                          )}
+                        </div>
+
+                        <span className="record-caption">
+                          {recorderState === 'recording' && t('recordingState')}
+                          {recorderState === 'paused' && t('pausedState')}
+                          {recorderState === 'idle' && t('record')}
+                        </span>
+                      </div>
+
+                      {recorderState === 'idle' && (
+                        <div className="upload-zone">
+                          <label className="upload-label">
+                            <Icon name="upload" size={25} />
+                            <span>{t('orUpload')}</span>
+                            <input
+                              key={uploadKey}
+                              type="file"
+                              accept="audio/*,video/*"
+                              hidden
+                              onChange={onFileSelected}
+                            />
+                          </label>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {job && job.status !== 'done' && (
+                    <div className="job-panel">
+                      <div className="progress-track">
+                        <div
+                          className={`progress-fill ${job.status === 'error' ? 'danger' : ''}`}
+                          style={{ width: `${job.status === 'error' ? 100 : Math.max(4, Math.min(99, job.progress || 4))}%` }}
+                        />
+                      </div>
+                      <p>
+                        {job.status === 'error'
+                          ? job.error
+                          : job.status === 'pending'
+                            ? t('queued')
+                            : job.message || t('jobProgress', { progress: Math.max(4, Math.min(99, job.progress || 4)) })}
+                      </p>
+                      {job.status === 'error' && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => setJob(null)}>
+                          <Icon name="x" size={14} /> {t('jobDismiss')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {lastResult && (
+                  <div className="card fade-in">
+                    <ResultCard
+                      item={lastResult}
+                      {...cardProps}
+                      onRemove={removeItem}
+                      t={t}
+                    />
+                  </div>
+                )}
+
+                <div className="history-head">
+                  <h2>{t('history.recent')}</h2>
+                  <button className="btn btn-danger btn-sm" onClick={clearHistory}>
+                    <Icon name="trash" size={14} /> {t('clearHistory')}
+                  </button>
+                </div>
+                <HistoryList
+                  items={history}
+                  expandedId={expandedId}
+                  setExpandedId={setExpandedId}
+                  cardProps={historyCardProps}
+                  onRemove={removeItem}
+                  t={t}
+                />
+              </div>
+            )}
+
+            {view === 'direct' && (
+              <div className="fade-in">
+                <div className="page-head">
+                  <h2>{t('nav.direct')}</h2>
+                  <p>{t('live.hint')}</p>
+                </div>
+                <LiveMode
+                  language={language}
+                  onError={setError}
+                  onSaved={(item) => {
+                    loadHistory();
+                    notify(t('live.saved'));
+                  }}
+                />
+              </div>
+            )}
+
+            {view === 'commands' && (
+              <div className="fade-in">
+                <div className="page-head">
+                  <h2>{t('nav.commands')}</h2>
+                  <p>{t('commands.hint')}</p>
+                </div>
+                <CommandMic
+                  language={language}
+                  onCommand={handleVoiceCommand}
+                  onError={setError}
+                  disabled={false}
+                />
+              </div>
+            )}
+
+            {view === 'history' && (
+              <div className="fade-in">
+                <div className="page-head">
+                  <h2>{t('nav.history')}</h2>
+                  <p>{t('historyTitle', { count: history.length })}</p>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <button className="btn btn-danger btn-sm" onClick={clearHistory}>
+                    <Icon name="trash" size={14} /> {t('clearHistory')}
+                  </button>
+                </div>
+                <HistoryList
+                  items={history}
+                  expandedId={expandedId}
+                  setExpandedId={setExpandedId}
+                  cardProps={historyCardProps}
+                  onRemove={removeItem}
+                  t={t}
+                />
+              </div>
+            )}
+
+            {view === 'dashboard' && <DashboardView user={user} onError={setError} />}
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+}

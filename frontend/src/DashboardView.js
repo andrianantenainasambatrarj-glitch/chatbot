@@ -1,167 +1,177 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { apiFetch } from './api';
+import { statsApi, adminStatsApi, adminUsersApi, adminUpdateUserApi } from './api';
+import Icon from './components/Icon';
 
-function BarChart({ daily }) {
-  const max = Math.max(1, ...daily.map((day) => day.count));
-  if (!daily.length) return <p className="muted">—</p>;
+function StatCard({ icon, value, label }) {
   return (
-    <div className="barchart" role="img" aria-label="Transcriptions par jour">
-      {daily.map((day) => (
-        <div key={day.day} className="bar-col" title={`${day.day}: ${day.count}`}>
-          <div className="bar" style={{ height: `${Math.round((day.count / max) * 100)}%` }}>
-            <span className="bar-value">{day.count}</span>
-          </div>
-          <span className="bar-label">{day.day.slice(5)}</span>
-        </div>
-      ))}
+    <div className="stat-card">
+      <span className="stat-icon"><Icon name={icon} size={19} /></span>
+      <div>
+        <div className="stat-value">{value}</div>
+        <div className="stat-label">{label}</div>
+      </div>
     </div>
   );
 }
 
-export default function DashboardView({ user, onReloadUser }) {
+function QuotaRow({ t, used, quota }) {
+  const percent = quota ? Math.min(100, Math.round((used / quota) * 100)) : 0;
+  return (
+    <div className="dashboard-panel">
+      <h3>{t('dashboard.quota')}</h3>
+      <div className="progress-track" style={{ height: 10 }}>
+        <div className="progress-fill" style={{ width: quota ? `${percent}%` : '100%', opacity: quota ? 1 : 0.35 }} />
+      </div>
+      <p className="quota-line">
+        {quota
+          ? t('dashboard.quotaUsed', { used, limit: quota, percent })
+          : t('dashboard.quotaUnlimited', { used })}
+      </p>
+    </div>
+  );
+}
+
+export default function DashboardView({ user, onError }) {
   const { t } = useTranslation();
   const [stats, setStats] = useState(null);
+  const [admin, setAdmin] = useState(null);
   const [adminUsers, setAdminUsers] = useState(null);
-  const [totals, setTotals] = useState(null);
-  const [error, setError] = useState('');
-
-  const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
-    apiFetch('/api/stats').then(setStats).catch((err) => setError(err.message));
-  }, []);
+    statsApi().then(setStats).catch((err) => onError(err.message));
+    if (user?.role === 'admin' || user?.is_admin) {
+      adminStatsApi().then(setAdmin).catch(() => {});
+      adminUsersApi().then(setAdminUsers).catch(() => {});
+    }
+  }, [user, onError]);
 
-  useEffect(() => {
-    if (!isAdmin) return undefined;
-    apiFetch('/api/admin/users').then(setAdminUsers).catch((err) => setError(err.message));
-    apiFetch('/api/admin/stats').then(setTotals).catch(() => {});
-    return undefined;
-  }, [isAdmin]);
-
-  const changeQuota = async (userId, minutes) => {
+  const updateUser = async (id, patch) => {
     try {
-      await apiFetch(`/api/admin/users/${userId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ monthly_quota_minutes: minutes ? Number(minutes) : null }),
-      });
-      const refreshed = await apiFetch('/api/admin/users');
-      setAdminUsers(refreshed);
+      const updated = await adminUpdateUserApi(id, patch);
+      setAdminUsers((prev) =>
+        prev.map((u) => (u.id === id ? { ...u, ...updated } : u))
+      );
     } catch (err) {
-      setError(err.message);
+      onError(err.message);
     }
   };
 
-  const changeRole = async (userId, role) => {
-    await apiFetch(`/api/admin/users/${userId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role }),
-    });
-    setAdminUsers(await apiFetch('/api/admin/users'));
-  };
-
-  if (!stats) return <div className="centered-loader"><div className="loader"></div></div>;
-
-  const quotaPercent = stats.quota_minutes
-    ? Math.min(100, Math.round((stats.used_minutes_month / stats.quota_minutes) * 100))
-    : null;
+  const daily = stats?.daily?.slice(-14) || [];
+  const chartMax = Math.max(1, ...daily.map((d) => d.count));
+  const engineCount = Object.keys(stats?.by_engine || {}).length;
+  const languageCount = Object.keys(stats?.by_language || {}).length;
 
   return (
-    <section className="dashboard">
-      <h2>{t('dashboard.title')}</h2>
-      {error && <div className="error-message">⚠️ {error}</div>}
-
-      <div className="stat-cards">
-        <div className="stat-card">
-          <span className="stat-value">{stats.total_transcriptions}</span>
-          <span className="stat-label">{t('dashboard.transcriptions')}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">{stats.total_minutes}</span>
-          <span className="stat-label">{t('dashboard.minutes')}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">
-            {Object.keys(stats.by_engine).map((engine) => engine).join(', ') || '—'}
-          </span>
-          <span className="stat-label">{t('dashboard.engines')}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">
-            {Object.keys(stats.by_language).map((language) => language.toUpperCase()).join(', ') || '—'}
-          </span>
-          <span className="stat-label">{t('dashboard.languages')}</span>
-        </div>
+    <div className="fade-in">
+      <div className="page-head">
+        <h2>{t('dashboard.title')}</h2>
+        <p>{t('dashboard.subtitle')}</p>
       </div>
 
-      <div className="dashboard-panel">
-        <h3>{t('dashboard.daily')}</h3>
-        <BarChart daily={stats.daily} />
-      </div>
-
-      {quotaPercent !== null && (
-        <div className="dashboard-panel">
-          <h3>{t('dashboard.quota')}</h3>
-          <div className="progress-bar">
-            <div
-              className={`progress-fill ${quotaPercent > 90 ? 'danger' : ''}`}
-              style={{ width: `${quotaPercent}%` }}
-            ></div>
+      {!stats ? (
+        <div className="loader" />
+      ) : (
+        <>
+          <div className="stat-grid">
+            <StatCard icon="fileText" value={stats.total_transcriptions} label={t('dashboard.total')} />
+            <StatCard icon="clock" value={Math.round(stats.total_minutes)} label={t('dashboard.minutes')} />
+            <StatCard icon="cpu" value={engineCount} label={t('dashboard.engines')} />
+            <StatCard icon="globe" value={languageCount} label={t('dashboard.languages')} />
           </div>
-          <p>{stats.used_minutes_month} / {stats.quota_minutes} {t('dashboard.minutesUsedMonth')}</p>
-        </div>
-      )}
 
-      {isAdmin && (
-        <div className="dashboard-panel admin-panel">
-          <h3>🛠️ {t('dashboard.admin')}</h3>
-          {totals && (
-            <p className="muted">
-              {totals.users} {t('dashboard.usersUnit')} · {totals.transcriptions}{' '}
-              {t('dashboard.transcriptionsUnit')}
-            </p>
-          )}
-          <div className="table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>E-mail</th>
-                  <th>Rôle</th>
-                  <th>{t('dashboard.monthUsage')}</th>
-                  <th>{t('dashboard.quotaCol')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(adminUsers || []).map((row) => (
-                  <tr key={row.id}>
-                    <td>{row.email}</td>
-                    <td>
-                      <select
-                        value={row.role}
-                        onChange={(event) => changeRole(row.id, event.target.value)}
-                      >
-                        <option value="user">user</option>
-                        <option value="admin">admin</option>
-                      </select>
-                    </td>
-                    <td>{row.used_minutes_month} min</td>
-                    <td>
-                      <input
-                        type="number"
-                        min="0"
-                        defaultValue={row.monthly_quota_minutes || 0}
-                        onBlur={(event) => changeQuota(row.id, event.target.value)}
+          <QuotaRow
+            t={t}
+            used={Math.round(stats.used_minutes_month)}
+            quota={stats.quota_minutes}
+          />
+
+          <div className="dashboard-panel">
+            <h3>{t('dashboard.chart')}</h3>
+            {daily.some((d) => d.count > 0) ? (
+              <div className="barchart">
+                {daily.map((day) => {
+                  const date = new Date(day.day);
+                  const label = `${date.getDate()}/${date.getMonth() + 1}`;
+                  return (
+                    <div className="bar-col" key={day.day} title={`${label} — ${day.count}`}>
+                      {day.count > 0 && <span className="bar-value">{day.count}</span>}
+                      <div
+                        className="bar"
+                        style={{ height: `${Math.max(day.count ? 4 : 0, (day.count / chartMax) * 110)}px` }}
                       />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <span className="bar-label">{label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="small muted">{t('dashboard.noActivity')}</p>
+            )}
           </div>
+        </>
+      )}
+
+      {(user?.role === 'admin' || user?.is_admin) && (
+        <div className="dashboard-panel">
+          <h3>{t('dashboard.admin')}</h3>
+          {!admin || !adminUsers ? (
+            <div className="loader" />
+          ) : (
+            <>
+              <div className="stat-grid" style={{ marginBottom: 18 }}>
+                <StatCard icon="users" value={admin.users} label={t('dashboard.totalUsers')} />
+                <StatCard icon="fileText" value={admin.transcriptions} label={t('dashboard.totalTrans')} />
+                <StatCard icon="refresh" value={admin.jobs_pending} label={t('dashboard.jobsPending')} />
+              </div>
+              <div className="admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>{t('dashboard.emailCol')}</th>
+                      <th>{t('dashboard.usageCol')}</th>
+                      <th>{t('dashboard.quotaCol')}</th>
+                      <th>{t('dashboard.roleCol')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminUsers.map((u) => (
+                      <tr key={u.id}>
+                        <td>{u.email}</td>
+                        <td>
+                          {u.total_transcriptions} · {Math.round(u.total_minutes || 0)} min
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            defaultValue={u.monthly_quota_minutes ?? 0}
+                            onBlur={(e) => {
+                              const value = Number(e.target.value) || 0;
+                              if (value !== (u.monthly_quota_minutes ?? 0)) {
+                                updateUser(u.id, { monthly_quota_minutes: value });
+                              }
+                            }}
+                          />
+                        </td>
+                        <td>
+                          <select
+                            value={u.role}
+                            onChange={(e) => updateUser(u.id, { role: e.target.value })}
+                          >
+                            <option value="user">{t('dashboard.roleUser')}</option>
+                            <option value="admin">{t('dashboard.roleAdmin')}</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       )}
-    </section>
+    </div>
   );
 }

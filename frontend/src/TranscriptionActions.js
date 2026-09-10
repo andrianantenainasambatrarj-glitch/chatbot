@@ -1,292 +1,274 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { apiFetch } from './api';
-import { isSpeechSupported, speak, stopSpeaking } from './speech';
+import {
+  insightsApi, chatApi, shareApi,
+  emailApi, webhookApi,
+} from './api';
+import Icon from './components/Icon';
 
-function Accordion({ icon, title, children, open, onToggle }) {
+function Accordion({ icon, title, open, onToggle, children }) {
   return (
-    <div className={`action-block ${open ? 'open' : ''}`}>
-      <button type="button" className="action-toggle" onClick={onToggle}>
-        {icon} {title} <span className="chevron">{open ? '▾' : '▸'}</span>
+    <div className={`accordion ${open ? 'open' : ''}`}>
+      <button
+        type="button"
+        className="accordion-toggle"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <Icon name={icon} size={18} />
+        <span>{title}</span>
+        <Icon name="chevronDown" size={16} className="chev" />
       </button>
-      {open && <div className="action-body">{children}</div>}
+      {open && <div className="accordion-body">{children}</div>}
     </div>
   );
 }
 
-export default function TranscriptionActions({ transcription, language, onChanged }) {
+function CopyButton({ text, t }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <button className="btn btn-secondary btn-sm" onClick={copy}>
+      <Icon name={copied ? 'check' : 'copy'} size={15} />
+      {copied ? t('share.copied') : t('share.copy')}
+    </button>
+  );
+}
+
+function PanelMessage({ children }) {
+  return <p className="small muted" style={{ marginTop: 8 }}>{children}</p>;
+}
+
+function sentimentKey(rawSentiment) {
+  const label = (
+    typeof rawSentiment === 'string' ? rawSentiment : rawSentiment?.label || ''
+  ).toLowerCase();
+  if (label.includes('pos')) return 'positive';
+  if (label.includes('neg') || label.includes('nég')) return 'negative';
+  return 'neutral';
+}
+
+export default function TranscriptionActions({
+  item,
+  insights, setInsights,
+  chatMessages, setChatMessages,
+  openPanel, setOpenPanel,
+  notify, onError,
+}) {
   const { t } = useTranslation();
-  const [openPanel, setOpenPanel] = useState('');
-  const [insights, setInsights] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [messages, setMessages] = useState([]);
+  const [loadingInsights, setLoadingInsights] = useState(false);
+
   const [question, setQuestion] = useState('');
-  const [shareLinks, setShareLinks] = useState([]);
-  const [copied, setCopied] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+
   const [email, setEmail] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
-  const [feedback, setFeedback] = useState('');
-  const [speaking, setSpeaking] = useState(false);
+  const [shareToken, setShareToken] = useState(null);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [sendingWebhook, setSendingWebhook] = useState(false);
 
-  const toggle = (name) => setOpenPanel((current) => (current === name ? '' : name));
-
-  const showFeedback = (message) => {
-    setFeedback(message);
-    setTimeout(() => setFeedback(''), 4000);
-  };
-
-  const loadInsights = async () => {
-    if (openPanel === 'insights') {
-      toggle('insights');
-      return;
-    }
-    setOpenPanel('insights');
-    if (!insights || insights._id !== transcription.id) {
-      setBusy(true);
-      try {
-        const data = await apiFetch(`/api/transcriptions/${transcription.id}/insights`, {
-          method: 'POST',
-        });
-        setInsights({ ...data, _id: transcription.id });
-      } catch (err) {
-        showFeedback(err.message);
-      } finally {
-        setBusy(false);
-      }
-    }
-  };
-
-  const askQuestion = async (event) => {
-    event.preventDefault();
-    if (!question.trim()) return;
-    const newMessages = [...messages, { role: 'user', content: question.trim() }];
-    setMessages(newMessages);
+  const sendQuestion = async () => {
+    const q = question.trim();
+    if (!q) return;
+    setChatBusy(true);
+    const history = [...chatMessages, { role: 'user', content: q }];
+    setChatMessages(history);
     setQuestion('');
     try {
-      const data = await apiFetch(`/api/transcriptions/${transcription.id}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: newMessages[newMessages.length - 1].content,
-                               history: newMessages.slice(0, -1) }),
-      });
-      setMessages([...newMessages, { role: 'assistant', content: data.reply }]);
+      const answer = await chatApi(item.id, q, chatMessages);
+      setChatMessages([...history, { role: 'assistant', content: answer }]);
     } catch (err) {
-      setMessages([...newMessages, { role: 'assistant', content: `⚠️ ${err.message}` }]);
+      onError(err.message);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const askInsights = async () => {
+    setLoadingInsights(true);
+    try {
+      setInsights(await insightsApi(item.id));
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setLoadingInsights(false);
     }
   };
 
   const createShare = async () => {
     try {
-      const link = await apiFetch(`/api/transcriptions/${transcription.id}/share`, {
-        method: 'POST',
-      });
-      setShareLinks((links) => [link, ...links]);
+      const data = await shareApi(item.id);
+      setShareToken(data.token);
+      notify(t('share.created'));
     } catch (err) {
-      showFeedback(err.message);
+      onError(err.message);
     }
   };
 
-  const revokeShare = async (token) => {
-    await apiFetch(`/api/transcriptions/${transcription.id}/share/${token}`, { method: 'DELETE' });
-    setShareLinks((links) => links.filter((link) => link.token !== token));
-  };
-
-  const copyLink = async (path) => {
-    const url = `${window.location.origin}${path}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(path);
-      setTimeout(() => setCopied(''), 2000);
-    } catch {
-      showFeedback(url);
-    }
-  };
-
-  const sendEmail = async (event) => {
-    event.preventDefault();
-    try {
-      await apiFetch(`/api/transcriptions/${transcription.id}/email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      showFeedback(`✅ ${t('actions.emailSent')}`);
-      setEmail('');
-    } catch (err) {
-      showFeedback(`⚠️ ${err.message}`);
-    }
-  };
-
-  const sendWebhook = async (event) => {
-    event.preventDefault();
-    try {
-      await apiFetch(`/api/transcriptions/${transcription.id}/webhook`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: webhookUrl }),
-      });
-      showFeedback(`✅ ${t('actions.webhookSent')}`);
-      setWebhookUrl('');
-    } catch (err) {
-      showFeedback(`⚠️ ${err.message}`);
-    }
-  };
-
-  const toggleSpeech = () => {
-    if (speaking) {
-      stopSpeaking();
-      setSpeaking(false);
+  const sendEmail = async () => {
+    if (!email.trim() || !email.includes('@')) {
+      onError(t('share.emailRequired'));
       return;
     }
-    if (speak(transcription.text, language, { onEnd: () => setSpeaking(false) })) {
-      setSpeaking(true);
+    setSendingEmail(true);
+    try {
+      await emailApi(item.id, email.trim());
+      notify(t('share.emailSent'));
+      setEmail('');
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSendingEmail(false);
     }
   };
 
-  const sentimentLabel = insights?.sentiment
-    ? `${insights.sentiment.label} (${insights.sentiment.score})`
+  const sendWebhook = async () => {
+    if (!/^https?:\/\//.test(webhookUrl.trim())) {
+      onError(t('share.webhookInvalid'));
+      return;
+    }
+    setSendingWebhook(true);
+    try {
+      await webhookApi(item.id, webhookUrl.trim());
+      notify(t('share.webhookSent'));
+      setWebhookUrl('');
+    } catch (err) {
+      onError(err.message);
+    } finally {
+      setSendingWebhook(false);
+    }
+  };
+
+  const shareUrl = shareToken
+    ? `${window.location.origin}/shared/${shareToken}`
     : '';
 
   return (
-    <div className="actions">
-      {feedback && <div className="feedback-toast" role="status">{feedback}</div>}
-      <div className="action-row">
-        <button type="button" className="secondary-button small" onClick={loadInsights}>
-          🧠 {t('actions.insights')}
-        </button>
-        <button
-          type="button"
-          className="secondary-button small"
-          onClick={() => toggle('chat')}
-        >
-          💬 {t('actions.chat')}
-        </button>
-        {isSpeechSupported() && (
-          <button type="button" className="secondary-button small" onClick={toggleSpeech}>
-            {speaking ? `⏹️ ${t('actions.stopListening')}` : `🔊 ${t('actions.listen')}`}
+    <div>
+      <Accordion
+        icon="sparkles"
+        title={t('insights.title')}
+        open={openPanel === 'insights'}
+        onToggle={() => setOpenPanel(openPanel === 'insights' ? null : 'insights')}
+      >
+        {!insights && (
+          <button className="btn btn-primary btn-sm" onClick={askInsights} disabled={loadingInsights}>
+            {loadingInsights ? <span className="loader sm" /> : <Icon name="sparkles" size={15} />}
+            {t('insights.generate')}
           </button>
         )}
-        <button type="button" className="secondary-button small" onClick={() => toggle('share')}>
-          🔗 {t('actions.share')}
-        </button>
-        <button type="button" className="secondary-button small" onClick={() => toggle('email')}>
-          ✉️ {t('actions.email')}
-        </button>
-        <button type="button" className="secondary-button small" onClick={() => toggle('webhook')}>
-          🔔 {t('actions.webhook')}
-        </button>
-      </div>
+        {insights && (
+          <>
+            <h4>{t('insights.summary')}</h4>
+            <p className="small">{insights.summary}</p>
 
-      {busy && <div className="loader small"></div>}
-
-      <Accordion icon="🧠" title={t('actions.insights')} open={openPanel === 'insights'}
-        onToggle={loadInsights}>
-        {insights && insights._id === transcription.id && (
-          <div className="insights">
-            <h4>{t('actions.summary')} {insights.engine === 'llm' ? '· IA' : '· hors-ligne'}</h4>
-            <p>{insights.summary}</p>
-
-            <h4>{t('actions.tasks')}</h4>
-            {insights.action_items.length === 0 ? (
-              <p className="muted">{t('actions.noTasks')}</p>
-            ) : (
+            <h4>{t('insights.tasks')}</h4>
+            {insights.action_items?.length ? (
               <ul className="task-list">
-                {insights.action_items.map((item, index) => (
-                  <li key={index}>☐ {item}</li>
-                ))}
+                {insights.action_items.map((task, i) => <li key={i}>{task}</li>)}
               </ul>
-            )}
+            ) : <PanelMessage>{t('insights.noTasks')}</PanelMessage>}
 
-            <h4>{t('actions.keywords')}</h4>
+            <h4>{t('insights.keywords')}</h4>
             <div className="keyword-cloud">
-              {insights.keywords.map((word) => (
-                <span key={word} className="keyword-chip">{word}</span>
+              {(insights.keywords || []).map((kw, i) => (
+                <span key={i} className={`keyword-chip${i < 3 ? ' accent' : ''}`}>{kw}</span>
               ))}
             </div>
 
-            <h4>{t('actions.sentiment')}</h4>
-            <p>{sentimentLabel}</p>
-          </div>
+            <h4>{t('insights.sentiment')}</h4>
+            <p className="sentiment">
+              <Icon
+                name={sentimentKey(insights.sentiment) === 'positive'
+                  ? 'check'
+                  : sentimentKey(insights.sentiment) === 'negative' ? 'x' : 'clock'}
+                size={16}
+              />
+              {t(`insights.sentiments.${sentimentKey(insights.sentiment)}`)}
+            </p>
+          </>
         )}
       </Accordion>
 
-      <Accordion icon="💬" title={t('actions.chat')} open={openPanel === 'chat'}
-        onToggle={() => toggle('chat')}>
-        <div className="chat-panel">
-          <div className="chat-messages">
-            {messages.length === 0 && <p className="muted">{t('actions.chatHint')}</p>}
-            {messages.map((message, index) => (
-              <div key={index} className={`chat-msg ${message.role}`}>
-                <button
-                  type="button"
-                  className="icon-button"
-                  title={t('actions.listen')}
-                  onClick={() => speak(message.content, language)}
-                >
-                  🔊
-                </button>
-                <span>{message.content}</span>
-              </div>
-            ))}
-          </div>
-          <form className="chat-input" onSubmit={askQuestion}>
-            <input
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder={t('actions.askPlaceholder')}
-            />
-            <button className="record-button small" type="submit">➤</button>
-          </form>
+      <Accordion
+        icon="chat"
+        title={t('chat.title')}
+        open={openPanel === 'chat'}
+        onToggle={() => setOpenPanel(openPanel === 'chat' ? null : 'chat')}
+      >
+        <div className="chat-messages">
+          {chatMessages.length === 0 && <PanelMessage>{t('chat.placeholder')}</PanelMessage>}
+          {chatMessages.map((msg, i) => (
+            <div key={i} className={`chat-msg ${msg.role === 'user' ? 'user' : 'assistant'}`}>
+              <Icon name={msg.role === 'user' ? 'mic' : 'cpu'} size={15} />
+              <span>{msg.content}</span>
+            </div>
+          ))}
+        </div>
+        <div className="chat-input">
+          <input
+            type="text"
+            value={question}
+            placeholder={t('chat.askPlaceholder')}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') sendQuestion(); }}
+          />
+          <button className="btn btn-primary btn-sm" onClick={sendQuestion} disabled={chatBusy}>
+            {chatBusy ? <span className="loader sm" /> : <Icon name="send" size={15} />}
+          </button>
         </div>
       </Accordion>
 
-      <Accordion icon="🔗" title={t('actions.share')} open={openPanel === 'share'}
-        onToggle={() => toggle('share')}>
-        <button type="button" className="secondary-button" onClick={createShare}>
-          {t('actions.createLink')}
-        </button>
-        {shareLinks.map((link) => (
-          <div key={link.token} className="share-link-row">
-            <code>{window.location.origin}{link.url}</code>
-            <button type="button" className="link-button" onClick={() => copyLink(link.url)}>
-              {copied === link.url ? t('actions.copied') : t('actions.copy')}
-            </button>
-            <button type="button" className="icon-button" onClick={() => revokeShare(link.token)}>
-              🗑️
-            </button>
+      <Accordion
+        icon="share"
+        title={t('share.title')}
+        open={openPanel === 'share'}
+        onToggle={() => setOpenPanel(openPanel === 'share' ? null : 'share')}
+      >
+        <h4>{t('share.linkTitle')}</h4>
+        {!shareToken ? (
+          <button className="btn btn-primary btn-sm" onClick={createShare}>
+            <Icon name="link" size={15} /> {t('share.create')}
+          </button>
+        ) : (
+          <div className="share-row">
+            <code>{shareUrl}</code>
+            <CopyButton text={shareUrl} t={t} />
           </div>
-        ))}
-        <p className="muted small-text">{t('actions.shareHint')}</p>
-      </Accordion>
+        )}
 
-      <Accordion icon="✉️" title={t('actions.email')} open={openPanel === 'email'}
-        onToggle={() => toggle('email')}>
-        <form className="inline-form" onSubmit={sendEmail}>
+        <h4>{t('share.emailTitle')}</h4>
+        <div className="inline-form">
           <input
             type="email"
-            required
+            placeholder={t('share.emailPlaceholder')}
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="destinataire@exemple.com"
+            onChange={(e) => setEmail(e.target.value)}
           />
-          <button className="record-button small" type="submit">{t('actions.send')}</button>
-        </form>
-        <p className="muted small-text">{t('actions.emailHint')}</p>
-      </Accordion>
+          <button className="btn btn-secondary btn-sm" onClick={sendEmail} disabled={sendingEmail}>
+            {sendingEmail ? <span className="loader sm" /> : <Icon name="mail" size={15} />}
+            {t('share.sendEmail')}
+          </button>
+        </div>
+        <PanelMessage>{t('share.emailHint')}</PanelMessage>
 
-      <Accordion icon="🔔" title={t('actions.webhook')} open={openPanel === 'webhook'}
-        onToggle={() => toggle('webhook')}>
-        <form className="inline-form" onSubmit={sendWebhook}>
+        <h4>{t('share.webhookTitle')}</h4>
+        <div className="inline-form">
           <input
             type="url"
-            required
+            placeholder="https://exemple.com/webhook"
             value={webhookUrl}
-            onChange={(event) => setWebhookUrl(event.target.value)}
-            placeholder="https://n8n.exemple.com/webhook/..."
+            onChange={(e) => setWebhookUrl(e.target.value)}
           />
-          <button className="record-button small" type="submit">{t('actions.send')}</button>
-        </form>
-        <p className="muted small-text">{t('actions.webhookHint')}</p>
+          <button className="btn btn-secondary btn-sm" onClick={sendWebhook} disabled={sendingWebhook}>
+            {sendingWebhook ? <span className="loader sm" /> : <Icon name="webhook" size={15} />}
+            {t('share.sendWebhook')}
+          </button>
+        </div>
       </Accordion>
     </div>
   );

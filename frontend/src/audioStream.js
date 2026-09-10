@@ -40,6 +40,23 @@ function floatTo16BitPCM(float32Array) {
   return view.buffer;
 }
 
+// Analyseur léger pour visualiser un flux MediaRecorder (mode enregistrement)
+export function createStreamAnalyser(stream) {
+  if (!stream) return null;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  const context = new AudioContextClass();
+  const source = context.createMediaStreamSource(stream);
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.75;
+  source.connect(analyser);
+  return {
+    analyser,
+    stop: () => context.close().catch(() => {}),
+  };
+}
+
 export class MicPcmStream {
     constructor(onPcm, onError) {
     this.onPcm = onPcm;
@@ -63,6 +80,12 @@ export class MicPcmStream {
     this.context = new AudioContextClass();
     this.source = this.context.createMediaStreamSource(this.stream);
     this.processor = this.context.createScriptProcessor(4096, 1, 1);
+
+    // Analyseur exposé pour le visualiseur
+    this.analyser = this.context.createAnalyser();
+    this.analyser.fftSize = 512;
+    this.analyser.smoothingTimeConstant = 0.75;
+    this.source.connect(this.analyser);
 
     this.processor.onaudioprocess = (event) => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {

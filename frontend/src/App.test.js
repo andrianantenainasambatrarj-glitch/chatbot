@@ -22,3 +22,40 @@ test('bascule entre connexion et inscription', async () => {
     screen.getByRole('heading', { name: /créer un compte|create an account/i })
   ).toBeInTheDocument();
 });
+
+test('affiche le studio pour un utilisateur connecté', async () => {
+  const jsonOk = (data) =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: () => Promise.resolve(data),
+    });
+  global.fetch = jest.fn((url) => {
+    const target = String(url);
+    if (target.includes('/api/auth/me')) {
+      return jsonOk({ user: { id: 'u1', email: 'test@example.com', role: 'user' } });
+    }
+    if (target.includes('/api/transcriptions')) return jsonOk([]);
+    if (target.includes('/api/stats')) {
+      return jsonOk({
+        total_transcriptions: 0, total_minutes: 0, used_minutes_month: 0,
+        quota_minutes: null, by_engine: {}, by_language: {}, daily: [],
+      });
+    }
+    return jsonOk({});
+  });
+  localStorage.setItem('cv_token', 'jeton-de-test');
+
+  render(<App />);
+
+  expect(
+    await screen.findByRole('button', { name: /enregistrer|record/i })
+  ).toBeInTheDocument();
+
+  // La navigation latérale mène au tableau de bord
+  await userEvent.click(await screen.findByRole('button', { name: /tableau de bord|dashboard/i }));
+  expect(
+    await screen.findByRole('heading', { level: 2, name: /tableau de bord|dashboard/i })
+  ).toBeInTheDocument();
+});
