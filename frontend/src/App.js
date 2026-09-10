@@ -271,17 +271,25 @@ export default function App() {
       sharedApi(sharedToken)
         .then(setShared)
         .catch(() => setShared({ error: 'notFound' }));
-      return;
+      return undefined;
     }
     if (!getToken()) {
       setLoading(false);
-      return;
+      return undefined;
     }
+    let cancelled = false;
     authApi.me()
-      .then((data) => setUser(data.user))
-      .catch(() => clearToken())
-      .finally(() => setLoading(false));
-  }, [view, sharedToken]);
+      // /me renvoie l'utilisateur à plat ; login/register renvoient { token, user }
+      .then((data) => { if (!cancelled) setUser(data.user ?? data); })
+      .catch((err) => {
+        // Un jeton invalide/expiré déconnecte ; un souci réseau passager ne touche pas la session
+        if (!cancelled && err.status === 401) clearToken();
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // Vérification de session une seule fois au montage, PAS à chaque changement d'onglet
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     document.body.classList.toggle('dark-mode', darkMode);

@@ -34,7 +34,8 @@ test('affiche le studio pour un utilisateur connecté', async () => {
   global.fetch = jest.fn((url) => {
     const target = String(url);
     if (target.includes('/api/auth/me')) {
-      return jsonOk({ user: { id: 'u1', email: 'test@example.com', role: 'user' } });
+      // /me renvoie l'utilisateur à plat (pas de clé "user")
+      return jsonOk({ id: 'u1', email: 'test@example.com', role: 'user' });
     }
     if (target.includes('/api/transcriptions')) return jsonOk([]);
     if (target.includes('/api/stats')) {
@@ -58,4 +59,11 @@ test('affiche le studio pour un utilisateur connecté', async () => {
   expect(
     await screen.findByRole('heading', { level: 2, name: /tableau de bord|dashboard/i })
   ).toBeInTheDocument();
+
+  // Naviguer d'onglet en onglet ne doit jamais ramener à l'écran de connexion
+  await userEvent.click(screen.getByRole('button', { name: /historique|history/i }));
+  await userEvent.click(screen.getByRole('button', { name: /en direct|live/i }));
+  await userEvent.click(screen.getByRole('button', { name: /^studio$/i }));
+  expect(screen.queryByLabelText(/mot de passe|password/i)).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /enregistrer|record/i })).toBeInTheDocument();
 });

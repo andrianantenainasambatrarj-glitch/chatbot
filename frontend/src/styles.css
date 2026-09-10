@@ -1,39 +1,39 @@
 /* ==================================================================
    Chatbot Vocal — design system
-   Encre & papier, accent vermillon. Typographies Fraunces + Inter.
+   Bleu cyan, typographie Poppins, thèmes clair et sombre.
    ================================================================== */
 
 :root {
-  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 
-  --bg: #f5f2ec;
-  --surface: #fffdf9;
-  --surface-2: #faf7f1;
-  --surface-3: #f1ece2;
-  --border: #e4ddcf;
-  --border-strong: #d3c9b6;
+  --bg: #f2f6fa;
+  --surface: #ffffff;
+  --surface-2: #f7fafd;
+  --surface-3: #e9f1f8;
+  --border: #dfe8f1;
+  --border-strong: #c4d4e3;
 
-  --text: #23201b;
-  --text-muted: #756e60;
-  --text-faint: #9c9484;
+  --text: #242c36;
+  --text-muted: #5d6b7b;
+  --text-faint: #8b99a9;
 
-  --accent: #c24b31;
-  --accent-hover: #a83c25;
-  --accent-soft: #f6e5df;
-  --accent-contrast: #fffaf7;
+  --accent: #00aaff;
+  --accent-hover: #00ddff;
+  --accent-soft: #e0f5ff;
+  --accent-contrast: #ffffff;
 
-  --green: #3f7d5f;
-  --green-soft: #e3efe8;
-  --amber: #9a6b1f;
-  --amber-soft: #f5ebd7;
-  --red: #bb3b2e;
-  --red-soft: #f6e1dd;
+  --green: #15915f;
+  --green-soft: #dcf6ea;
+  --amber: #a06d12;
+  --amber-soft: #fbf0d7;
+  --red: #ff4444;
+  --red-soft: #ffe7e7;
 
-  --shadow-xs: 0 1px 2px rgba(35, 32, 27, 0.05);
-  --shadow-sm: 0 1px 3px rgba(35, 32, 27, 0.07), 0 1px 2px rgba(35, 32, 27, 0.04);
-  --shadow: 0 6px 24px -10px rgba(35, 32, 27, 0.18), 0 2px 6px -2px rgba(35, 32, 27, 0.08);
-  --shadow-lg: 0 24px 60px -20px rgba(35, 32, 27, 0.32);
+  --shadow-xs: 0 1px 2px rgba(21, 60, 102, 0.06);
+  --shadow-sm: 0 1px 3px rgba(21, 60, 102, 0.08), 0 1px 2px rgba(21, 60, 102, 0.05);
+  --shadow: 0 8px 26px -10px rgba(21, 60, 102, 0.22), 0 2px 6px -2px rgba(21, 60, 102, 0.08);
+  --shadow-lg: 0 24px 60px -20px rgba(15, 40, 70, 0.35);
 
   --radius-sm: 8px;
   --radius: 12px;
@@ -42,33 +42,39 @@
 }
 
 .dark-mode {
-  --bg: #16140f;
-  --surface: #1f1c16;
-  --surface-2: #26221c;
-  --surface-3: #302b22;
-  --border: #38322a;
-  --border-strong: #4a4338;
+  --bg: #23233a;
+  --surface: #2d2d44;
+  --surface-2: #33334d;
+  --surface-3: #3d3d5a;
+  --border: #414160;
+  --border-strong: #54547a;
 
-  --text: #ece6da;
-  --text-muted: #a89f8e;
-  --text-faint: #7e7666;
+  --text: #e8e8f2;
+  --text-muted: #a6a6c4;
+  --text-faint: #7c7c9e;
 
-  --accent: #e06649;
-  --accent-hover: #ec7a5f;
-  --accent-soft: rgba(224, 102, 73, 0.14);
-  --accent-contrast: #1f1410;
+  --accent: #00ddff;
+  --accent-hover: #5de9ff;
+  --accent-soft: rgba(0, 221, 255, 0.13);
+  --accent-contrast: #05303d;
 
-  --green: #74b595;
-  --green-soft: rgba(116, 181, 149, 0.13);
-  --amber: #d4a95f;
-  --amber-soft: rgba(212, 169, 95, 0.13);
-  --red: #e07a6d;
-  --red-soft: rgba(224, 122, 109, 0.13);
+  --green: #4fd19b;
+  --green-soft: rgba(79, 209, 155, 0.13);
+  --amber: #e3b767;
+  --amber-soft: rgba(227, 183, 103, 0.13);
+  --red: #ff6b6b;
+  --red-soft: rgba(255, 107, 107, 0.14);
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.32);
   --shadow: 0 8px 28px -10px rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
+}
+
+.dark-mode body,
+body.dark-mode {
+  background: linear-gradient(135deg, #1e1e2f, #2d2d44);
+  background-attachment: fixed;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -364,25 +370,28 @@ main.page {
   cursor: pointer;
   display: grid;
   place-items: center;
-  background: var(--text);
-  color: var(--bg);
-  box-shadow: var(--shadow);
-  transition: transform 0.15s ease, background 0.2s ease;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 8px 22px -8px rgba(0, 170, 255, 0.65), var(--shadow);
+  transition: transform 0.15s ease, background 0.2s ease, box-shadow 0.2s ease;
   position: relative;
 }
-.record-circle:hover:not(:disabled) { transform: scale(1.04); }
+.record-circle:hover:not(:disabled) {
+  transform: scale(1.05);
+  background: var(--accent-hover);
+}
 .record-circle:active:not(:disabled) { transform: scale(0.97); }
 .record-circle .icon { width: 32px; height: 32px; }
 
 .record-circle.recording {
-  background: var(--accent);
+  background: #ff4444;
   color: #fff;
   animation: record-pulse 1.8s ease-out infinite;
 }
 @keyframes record-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(194, 75, 49, 0.45), var(--shadow); }
-  70% { box-shadow: 0 0 0 22px rgba(194, 75, 49, 0), var(--shadow); }
-  100% { box-shadow: 0 0 0 0 rgba(194, 75, 49, 0), var(--shadow); }
+  0% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.45), var(--shadow); }
+  70% { box-shadow: 0 0 0 22px rgba(255, 68, 68, 0), var(--shadow); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0), var(--shadow); }
 }
 
 .record-caption { font-size: 0.85rem; color: var(--text-muted); font-weight: 500; }
@@ -958,8 +967,10 @@ audio.audio-player { width: 100%; margin: 6px 0 2px; }
 .auth-shell { min-height: 100vh; display: grid; grid-template-columns: 0.9fr 1.1fr; }
 
 .auth-aside {
-  background: var(--text);
-  color: #f5f2ec;
+  background: linear-gradient(155deg, #0a3d63 0%, #0a6fa8 52%, #00aaff 100%);
+  color: #f4fbff;
+  --text-muted: rgba(244, 251, 255, 0.65);
+  --accent: #ffffff;
   padding: 54px 48px;
   display: flex;
   flex-direction: column;
@@ -968,21 +979,37 @@ audio.audio-player { width: 100%; margin: 6px 0 2px; }
   position: relative;
   overflow: hidden;
 }
-.auth-aside .brand-name { color: #f5f2ec; }
-.auth-aside .brand-tag { color: rgba(245, 242, 236, 0.55); }
-.auth-aside .brand-mark { box-shadow: none; }
-
-.auth-quote h2 {
-  color: #f5f2ec;
-  font-size: 2.05rem;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-  max-width: 13ch;
+.auth-aside::after {
+  content: '';
+  position: absolute;
+  width: 380px;
+  height: 380px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 221, 255, 0.28), transparent 65%);
+  top: -120px;
+  right: -120px;
 }
-.auth-quote p { margin-top: 16px; color: rgba(245, 242, 236, 0.66); font-size: 0.95rem; max-width: 34ch; }
-.auth-wave { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0.5; }
+.auth-aside .brand-name { color: #f4fbff; }
+.auth-aside .brand-tag { color: rgba(244, 251, 255, 0.6); }
+.auth-aside .brand-mark {
+  background: rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(4px);
+  box-shadow: none;
+}
+
+.auth-quote { position: relative; z-index: 1; }
+.auth-quote h2 {
+  color: #ffffff;
+  font-size: 2.05rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  max-width: 13ch;
+  text-shadow: 0 2px 18px rgba(0, 40, 70, 0.35);
+}
+.auth-quote p { margin-top: 16px; color: rgba(244, 251, 255, 0.78); font-size: 0.95rem; max-width: 34ch; }
+.auth-wave { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0.55; z-index: 0; }
 .auth-aside .waveform { height: 130px; }
-.auth-aside .hint { color: rgba(245, 242, 236, 0.45); text-align: left; font-size: 0.8rem; }
+.auth-aside .hint { color: rgba(244, 251, 255, 0.5); text-align: left; font-size: 0.8rem; }
 
 .auth-main { display: grid; place-items: center; padding: 40px 24px; position: relative; }
 .auth-card { width: 100%; max-width: 380px; }

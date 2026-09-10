@@ -46,8 +46,8 @@ export default function Waveform({ analyser, active = false, height = 72, classN
       ctx.clearRect(0, 0, w, h);
 
       const styles = getComputedStyle(canvas);
-      const accent = styles.getPropertyValue('--accent').trim() || '#c24b31';
-      const muted = styles.getPropertyValue('--text-muted').trim() || '#8a8275';
+      const accent = styles.getPropertyValue('--accent').trim() || '#00aaff';
+      const muted = styles.getPropertyValue('--text-muted').trim() || '#8b99a9';
       const slot = w / BARS;
       const barWidth = Math.max(2, slot * 0.46);
 
