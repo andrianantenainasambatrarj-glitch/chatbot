@@ -206,7 +206,7 @@ Il s'agit aujourd'hui davantage d'un **transcripteur vocal** que d'un « chatbot
 
 ## 5. Roadmap recommandée (par priorité et effort)
 
-### Sprint 1 — Stabilisation et correction (1 semaine, faible effort) 🔴
+### Sprint 1 — Stabilisation et correction ✅ LIVRÉ (2026-09-10) 🔴
 1. Fichiers Word à noms uniques + route de téléchargement ; fin de l'écrasement (bug n°1)
 2. Bons codes HTTP et gestions d'erreur ; variable `temp_audio` du `finally` (n°3, n°4)
 3. `requirements.txt` complet et épinglé + script de setup (ffmpeg, téléchargement du modèle Vosk)
@@ -215,12 +215,13 @@ Il s'agit aujourd'hui davantage d'un **transcripteur vocal** que d'un « chatbot
 6. README racine avec instructions complètes ; retirer NLTK/SpeechRecognition/Tailwind inutilisés OU les mettre en œuvre
 7. Corriger/remplacer le test React cassé
 
-### Sprint 2 — Expérience et données (1 à 2 semaines, effort moyen) 🟠
-8. Base SQLite + SQLAlchemy, API REST de l'historique (F13, F14) synchronisée avec le frontend
-9. Chronomètre, pause/reprise, réécoute avant envoi, upload de fichiers (F2, F10)
-10. Export TXT/PDF/SRT + édition du texte avant export (F9, F11, F12)
-11. Logging structuré, page /health, validations fichiers et rate limiting
-12. Docker Compose (backend + frontend + ffmpeg) et pipeline CI (tests + lint)
+### Sprint 2 — Expérience et données ✅ LIVRÉ (2026-09-10) 🟠
+8. ✅ Base SQLite + SQLAlchemy, API REST complète synchronisée avec le frontend (F13, F14)
+9. ✅ Chronomètre, pause/reprise, réécoute avant envoi, upload multi-formats MP3/M4A/OGG... (F2, F10)
+10. ✅ Exports DOCX/PDF/TXT/SRT (mots horodatés) + édition du texte avant export (F9, F11, F12)
+11. ✅ Logging structuré, /health (base + modèle), validation des formats et rate limiting (Flask-Limiter)
+12. ✅ Docker + docker-compose (backend ffmpeg/gunicorn, frontend nginx relayant l'API) et CI GitHub Actions (pytest + Jest + build)
+    - Restent pour plus tard : lint/format automatisés (ruff/Prettier) dans la CI
 
 ### Sprint 3 — Fonctionnalités avancées (2 à 4 semaines) 🟡
 13. Transcription streaming par WebSocket (F1), traitement asynchrone des gros fichiers (F3)

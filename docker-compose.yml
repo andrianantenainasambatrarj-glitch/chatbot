@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: .
+      args:
+        # Mettez 0 pour utiliser un modèle monté dans ./models
+        DOWNLOAD_MODEL: "1"
+    container_name: chatbot-vocal-backend
+    environment:
+      DATA_DIR: /app/data
+      # Même origine via nginx : CORS non sollicité en utilisation normale
+      CORS_ORIGINS: http://localhost:8080
+      RATELIMIT_STORAGE_URI: memory://
+    volumes:
+      - chatbot-data:/app/data
+    expose:
+      - "5001"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: chatbot-vocal-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  chatbot-data:

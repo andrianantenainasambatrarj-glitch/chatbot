@@ -1,357 +1,358 @@
 """Backend Flask du Chatbot Vocal.
 
-Routes :
-  GET  /health                          -> état du service
-  POST /api/transcribe                  -> transcrit un fichier WAV en document Word
-  GET  /api/transcriptions              -> liste l'historique des transcriptions
-  GET  /api/transcriptions/<id>         -> détail d'une transcription
-  GET  /api/transcriptions/<id>/download-> télécharge le document Word
-  DELETE /api/transcriptions/<id>       -> supprime une transcription
-  DELETE /api/transcriptions            -> vide l'historique
+Fonctionnalités :
+  - transcription de nombreux formats audio (WAV, MP3, M4A, OGG, WEBM...) via Vosk
+  - persistance dans SQLite (SQLAlchemy)
+  - exports DOCX, PDF, TXT et SRT (mots horodatés)
+  - édition de la transcription avant export
 
-Configuration par variables d'environnement (voir .env.example) :
-  FLASK_DEBUG, HOST, PORT, MODEL_PATH, DATA_DIR, MAX_CONTENT_LENGTH_MB, CORS_ORIGINS
+Routes principales :
+  GET    /health
+  POST   /api/transcribe
+  GET    /api/transcriptions
+  GET    /api/transcriptions/<id>
+  PATCH  /api/transcriptions/<id>
+  DELETE /api/transcriptions/<id>
+  DELETE /api/transcriptions
+  GET    /api/transcriptions/<id>/export/<docx|pdf|txt|srt>
 """
 
-import json
 import logging
 import os
 import threading
-import uuid
 from datetime import datetime
 from tempfile import NamedTemporaryFile
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-from docx import Document
-import pydub  # conversion audio (nécessite ffmpeg sur le système)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-MODEL_PATH = os.environ.get("MODEL_PATH", "models/vosk-model-small-fr-0.22")
-DATA_DIR = os.environ.get("DATA_DIR", "data")
-TRANSCRIPTIONS_DIR = os.path.join(DATA_DIR, "transcriptions")
-HISTORY_FILE = os.path.join(DATA_DIR, "transcription_history.json")
-MAX_CONTENT_LENGTH_MB = int(os.environ.get("MAX_CONTENT_LENGTH_MB", "50"))
-CORS_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get(
-        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-    ).split(",")
-    if origin.strip()
-]
+import exporters
+from audio_pipeline import (
+    AudioDecodeError,
+    ModelUnavailableError,
+    prepare_and_transcribe,
+    validate_extension,
+)
+from config import Config
+from models import EXPORT_FORMATS, Transcription, db
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("chatbot-vocal")
 
-app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH_MB * 1024 * 1024
-CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}})
+# Le rate limiter est global (l'extension conserve des références faibles)
+# et configuré par application via init_app() et les clés RATELIMIT_*.
+limiter = Limiter(get_remote_address)
 
-os.makedirs(TRANSCRIPTIONS_DIR, exist_ok=True)
-logger.info("Dossier de stockage prêt : %s", TRANSCRIPTIONS_DIR)
-
-# Le modèle Vosk est chargé une seule fois, au premier appel (lazy loading) :
-# l'API démarre même si le modèle n'est pas encore téléchargé.
+# Le modèle Vosk est chargé une seule fois, au premier appel (lazy loading).
 _model = None
 _model_lock = threading.Lock()
-_history_lock = threading.Lock()
-
-
-class ModelUnavailableError(RuntimeError):
-    """Levée quand le modèle Vosk est absent ou impossible à charger."""
 
 
 def get_model():
-    """Charge (une seule fois) et retourne le modèle Vosk."""
     global _model
     if _model is None:
         with _model_lock:
             if _model is None:
-                if not os.path.isdir(MODEL_PATH):
+                if not os.path.isdir(Config.MODEL_PATH):
                     raise ModelUnavailableError(
-                        f"Le modèle Vosk est introuvable dans '{MODEL_PATH}'. "
+                        f"Le modèle Vosk est introuvable dans '{Config.MODEL_PATH}'. "
                         "Lancez d'abord : python scripts/download_model.py"
                     )
                 try:
                     from vosk import Model
 
-                    logger.info("Chargement du modèle Vosk depuis %s ...", MODEL_PATH)
-                    _model = Model(MODEL_PATH)
+                    logger.info("Chargement du modèle Vosk depuis %s ...", Config.MODEL_PATH)
+                    _model = Model(Config.MODEL_PATH)
                     logger.info("Modèle Vosk chargé")
                 except ModelUnavailableError:
                     raise
-                except Exception as exc:  # dépendance manquante, modèle corrompu...
+                except Exception as exc:
                     raise ModelUnavailableError(
                         f"Impossible de charger le modèle Vosk : {exc}"
                     ) from exc
     return _model
 
 
-# ---------------------------------------------------------------------------
-# Persistance de l'historique (fichier JSON, avec verrou en attendant une BDD)
-# ---------------------------------------------------------------------------
-def load_history():
-    if not os.path.exists(HISTORY_FILE):
-        return []
-    try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.error("Historique illisible, repart d'une base vide : %s", exc)
-        return []
+def create_app(config_object=Config):
+    app = Flask(__name__)
+    app.config.from_object(config_object)
 
+    os.makedirs(app.config["DATA_DIR"], exist_ok=True)
+    app.config["TRANSCRIPTIONS_DIR"] = os.path.join(app.config["DATA_DIR"], "transcriptions")
+    os.makedirs(app.config["TRANSCRIPTIONS_DIR"], exist_ok=True)
 
-def save_history(history):
-    """Écriture atomique : on écrit dans un fichier temporaire puis on renomme."""
-    tmp_path = f"{HISTORY_FILE}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, HISTORY_FILE)
+    db.init_app(app)
+    with app.app_context():
+        db.create_all()
 
+    CORS(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
 
-# ---------------------------------------------------------------------------
-# Traitement audio
-# ---------------------------------------------------------------------------
-def prepare_wav_for_vosk(file_path):
-    """Convertit le WAV en PCM compatible Vosk : mono, 16 kHz, 16-bit."""
-    audio = pydub.AudioSegment.from_file(file_path)
-    audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
-    converted_path = file_path.replace(".wav", "_converted.wav")
-    audio.export(converted_path, format="wav")
-    return converted_path
+    # Les clés RATELIMIT_ENABLED / RATELIMIT_STORAGE_URI / RATELIMIT_DEFAULT
+    # sont lues automatiquement dans la configuration Flask par l'extension.
+    limiter.init_app(app)
 
+    # ------------------------------------------------------------------
+    # Services
+    # ------------------------------------------------------------------
+    def export_paths(base_path):
+        return {fmt: f"{base_path}.{fmt}" for fmt in EXPORT_FORMATS}
 
-def transcribe_audio(audio_path):
-    """Reconnaissance vocale Vosk, retourne le texte transcrit."""
-    import json as _json
-    from vosk import KaldiRecognizer
+    def write_exports(transcription, text, words=None):
+        """Génère les fichiers DOCX, PDF, TXT (et SRT si mots horodatés)."""
+        base_path = os.path.join(app.config["TRANSCRIPTIONS_DIR"], transcription.base_name)
+        kwargs = {
+            "language": transcription.language,
+            "duration_seconds": transcription.duration_seconds,
+        }
+        exporters.render_docx(text, f"{base_path}.docx", **kwargs)
+        exporters.render_pdf(text, f"{base_path}.pdf", **kwargs)
+        exporters.render_txt(text, f"{base_path}.txt", **kwargs)
+        if words:
+            exporters.render_srt(words, f"{base_path}.srt", **kwargs)
+            transcription.has_timestamps = True
 
-    recognizer = KaldiRecognizer(get_model(), 16000)
-    recognizer.SetWords(True)  # active les mots horodatés (utile plus tard)
-    with open(audio_path, "rb") as wf:
-        while True:
-            data = wf.read(4000)
-            if len(data) == 0:
-                break
-            recognizer.AcceptWaveform(data)
-    result = _json.loads(recognizer.FinalResult())
-    return result.get("text", "").strip()
-
-
-def create_word_document(text, destination_path):
-    doc = Document()
-    doc.add_heading("Transcription Vocale", level=0)
-    meta = doc.add_paragraph()
-    meta.add_run(f"Date : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}").italic = True
-    doc.add_paragraph(text)
-    doc.save(destination_path)
-
-
-def process_audio(audio_file):
-    """Sauvegarde l'audio, le transcrit, génère un document Word unique."""
-    temp_audio_path = None
-    converted_path = None
-    try:
-        # Vérifie le modèle avant tout traitement pour un message clair (503)
+    def process_audio(audio_file):
+        # Lève tôt une 503 explicite si le modèle n'est pas installé
         get_model()
-        suffix = os.path.splitext(audio_file.filename)[1] or ".wav"
-        with NamedTemporaryFile(delete=False, suffix=suffix) as temp_audio:
-            audio_file.save(temp_audio.name)
-            temp_audio_path = temp_audio.name
+        suffix = os.path.splitext(audio_file.filename)[1] or ".audio"
+        temp_path = None
+        try:
+            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                audio_file.save(tmp.name)
+                temp_path = tmp.name
 
-        converted_path = prepare_wav_for_vosk(temp_audio_path)
+            text, words, duration = prepare_and_transcribe(temp_path, get_model)
+            text = text.strip()
+            if not text:
+                raise ValueError("Aucun texte transcrit (audio vide, silencieux ou inaudible).")
 
-        text = transcribe_audio(converted_path).strip()
-        if not text:
-            raise ValueError("Aucun texte transcrit (audio vide, silencieux ou inaudible).")
+            now = datetime.now()
+            transcription = Transcription(
+                text=text,
+                base_name=(
+                    f"transcription_{now.strftime('%Y%m%d_%H%M%S_%f')}_"
+                ),
+                duration_seconds=round(duration, 2),
+                language=app.config["LANGUAGE"],
+            )
+            # L'identifiant UUID est généré à l'insertion ; on le complète au base_name
+            db.session.add(transcription)
+            db.session.flush()
+            transcription.base_name = f"{transcription.base_name}{transcription.id[:8]}"
 
-        # Nom de fichier unique : plus aucun écrasement entre transcriptions
-        transcription_id = str(uuid.uuid4())
-        timestamp = datetime.now()
-        filename = (
-            f"transcription_{timestamp.strftime('%Y%m%d_%H%M%S')}_"
-            f"{transcription_id[:8]}.docx"
-        )
-        document_path = os.path.join(TRANSCRIPTIONS_DIR, filename)
-        create_word_document(text, document_path)
-
-        entry = {
-            "id": transcription_id,
-            "text": text,
-            "filename": filename,
-            "created_at": timestamp.isoformat(),
-        }
-        with _history_lock:
-            history = load_history()
-            history.append(entry)
-            save_history(history)
-
-        logger.info("Transcription %s générée (%d caractères)", transcription_id, len(text))
-        return entry
-    finally:
-        for path in (temp_audio_path, converted_path):
-            if path and os.path.exists(path):
+            write_exports(transcription, text, words)
+            db.session.commit()
+            logger.info("Transcription %s générée (%d caractères)", transcription.id, len(text))
+            return transcription
+        except Exception:
+            db.session.rollback()
+            raise
+        finally:
+            if temp_path and os.path.exists(temp_path):
                 try:
-                    os.unlink(path)
+                    os.unlink(temp_path)
                 except OSError:
-                    logger.warning("Impossible de supprimer le fichier temporaire %s", path)
+                    logger.warning("Impossible de supprimer %s", temp_path)
 
+    def delete_files(transcription):
+        base_path = os.path.join(app.config["TRANSCRIPTIONS_DIR"], transcription.base_name)
+        for path in export_paths(base_path).values():
+            if os.path.exists(path):
+                os.unlink(path)
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-@app.route("/health")
-def health():
-    return jsonify(
-        {
-            "status": "ok",
-            "model_path": MODEL_PATH,
-            "model_available": os.path.isdir(MODEL_PATH),
+    # ------------------------------------------------------------------
+    # Routes
+    # ------------------------------------------------------------------
+    @app.route("/health")
+    def health():
+        from sqlalchemy import text as sql_text
+
+        database_ok = True
+        try:
+            db.session.execute(sql_text("SELECT 1"))
+        except Exception:
+            logger.exception("La base de données ne répond pas")
+            database_ok = False
+        return jsonify(
+            {
+                "status": "ok" if database_ok else "degraded",
+                "database": "ok" if database_ok else "error",
+                "model_path": app.config["MODEL_PATH"],
+                "model_available": os.path.isdir(app.config["MODEL_PATH"]),
+            }
+        ), (200 if database_ok else 503)
+
+    @app.route("/api/transcribe", methods=["POST"])
+    @limiter.limit(app.config["RATELIMIT_TRANSCRIBE"])
+    def transcribe():
+        if "audio" not in request.files:
+            return jsonify({"error": "Aucun fichier audio reçu (champ 'audio' attendu)."}), 400
+
+        audio_file = request.files["audio"]
+        if not audio_file.filename:
+            return jsonify({"error": "Aucun fichier audio sélectionné."}), 400
+
+        allowed, ext = validate_extension(audio_file.filename)
+        if not allowed:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            f"Format '.{ext}' non supporté. Formats acceptés : "
+                            + ", ".join(sorted(app.config["ALLOWED_EXTENSIONS"]))
+                        )
+                    }
+                ),
+                415,
+            )
+
+        try:
+            transcription = process_audio(audio_file)
+        except ModelUnavailableError as exc:
+            logger.error("Modèle indisponible : %s", exc)
+            return jsonify({"error": str(exc)}), 503
+        except AudioDecodeError as exc:
+            return jsonify({"error": str(exc)}), 422
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 422
+        except Exception:
+            logger.exception("Erreur pendant le traitement de l'audio")
+            return jsonify({"error": "Erreur interne lors du traitement de l'audio."}), 500
+
+        return jsonify(transcription.to_dict()), 201
+
+    @app.route("/api/transcriptions", methods=["GET"])
+    def list_transcriptions():
+        items = (
+            db.session.query(Transcription)
+            .order_by(Transcription.created_at.desc())
+            .all()
+        )
+        return jsonify([item.to_dict() for item in items])
+
+    @app.route("/api/transcriptions/<transcription_id>", methods=["GET"])
+    def get_transcription(transcription_id):
+        transcription = db.get_or_404(Transcription, transcription_id)
+        return jsonify(transcription.to_dict())
+
+    @app.route("/api/transcriptions/<transcription_id>", methods=["PATCH"])
+    def update_transcription(transcription_id):
+        transcription = db.get_or_404(Transcription, transcription_id)
+        payload = request.get_json(silent=True) or {}
+        new_text = payload.get("text")
+        if not isinstance(new_text, str) or not new_text.strip():
+            return jsonify({"error": "Le champ 'text' doit être une chaîne non vide."}), 400
+
+        transcription.text = new_text.strip()
+        # Les exports DOCX / PDF / TXT sont régénérés ; le SRT d'origine est conservé.
+        base_path = os.path.join(app.config["TRANSCRIPTIONS_DIR"], transcription.base_name)
+        kwargs = {
+            "language": transcription.language,
+            "duration_seconds": transcription.duration_seconds,
         }
-    )
+        exporters.render_docx(transcription.text, f"{base_path}.docx", **kwargs)
+        exporters.render_pdf(transcription.text, f"{base_path}.pdf", **kwargs)
+        exporters.render_txt(transcription.text, f"{base_path}.txt", **kwargs)
+        db.session.commit()
+        logger.info("Transcription %s modifiée", transcription.id)
+        return jsonify(transcription.to_dict())
 
+    @app.route("/api/transcriptions/<transcription_id>", methods=["DELETE"])
+    def delete_transcription(transcription_id):
+        transcription = db.get_or_404(Transcription, transcription_id)
+        delete_files(transcription)
+        db.session.delete(transcription)
+        db.session.commit()
+        return "", 204
 
-@app.route("/api/transcribe", methods=["POST"])
-def transcribe():
-    if "audio" not in request.files:
-        return jsonify({"error": "Aucun fichier audio reçu (champ 'audio' attendu)."}), 400
+    @app.route("/api/transcriptions", methods=["DELETE"])
+    def clear_transcriptions():
+        for transcription in db.session.query(Transcription).all():
+            delete_files(transcription)
+        db.session.query(Transcription).delete()
+        db.session.commit()
+        return "", 204
 
-    audio_file = request.files["audio"]
-    if not audio_file.filename:
-        return jsonify({"error": "Aucun fichier audio sélectionné."}), 400
+    @app.route("/api/transcriptions/<transcription_id>/export/<fmt>")
+    def export_transcription(transcription_id, fmt):
+        transcription = db.get_or_404(Transcription, transcription_id)
+        if fmt not in EXPORT_FORMATS:
+            return jsonify({"error": f"Format d'export inconnu : {fmt}"}), 404
+        if fmt == "srt" and not transcription.has_timestamps:
+            return jsonify({"error": "Export SRT indisponible pour cette transcription."}), 404
 
-    if not audio_file.filename.lower().endswith(".wav"):
-        return (
-            jsonify({"error": "Format non supporté : seul le format WAV est accepté."}),
-            415,
+        path = os.path.join(
+            app.config["TRANSCRIPTIONS_DIR"], f"{transcription.base_name}.{fmt}"
+        )
+        if not os.path.exists(path):
+            return jsonify({"error": "Fichier d'export manquant sur le serveur."}), 410
+
+        mimetypes = {
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "pdf": "application/pdf",
+            "txt": "text/plain",
+            "srt": "application/x-subrip",
+        }
+        return send_file(
+            path,
+            as_attachment=True,
+            download_name=f"{transcription.base_name}.{fmt}",
+            mimetype=mimetypes[fmt],
         )
 
-    try:
-        entry = process_audio(audio_file)
-    except ModelUnavailableError as exc:
-        logger.error("Modèle indisponible : %s", exc)
-        return jsonify({"error": str(exc)}), 503
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 422
-    except Exception:  # erreur inattendue : on logge la pile, message générique au client
-        logger.exception("Erreur pendant le traitement de l'audio")
-        return jsonify({"error": "Erreur interne lors du traitement de l'audio."}), 500
+    # ------------------------------------------------------------------
+    # Gestionnaires d'erreurs
+    # ------------------------------------------------------------------
+    @app.errorhandler(413)
+    def file_too_large(_error):
+        return (
+            jsonify(
+                {"error": f"Fichier trop volumineux (limite : {app.config['MAX_CONTENT_LENGTH_MB']} Mo)."}
+            ),
+            413,
+        )
 
-    entry["download_url"] = f"/api/transcriptions/{entry['id']}/download"
-    return jsonify(entry), 201
+    @app.errorhandler(404)
+    def not_found(_error):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Ressource introuvable."}), 404
+        return jsonify({"error": "Ressource introuvable.", "service": "Chatbot Vocal"}), 404
 
+    @app.errorhandler(429)
+    def rate_limited(error):
+        return jsonify({"error": "Trop de requêtes, réessayez plus tard.", "details": str(error.description)}), 429
 
-@app.route("/api/transcriptions", methods=["GET"])
-def list_transcriptions():
-    with _history_lock:
-        history = load_history()
-    # Plus récentes en premier
-    history = sorted(history, key=lambda item: item.get("created_at", ""), reverse=True)
-    for entry in history:
-        entry["download_url"] = f"/api/transcriptions/{entry['id']}/download"
-    return jsonify(history)
+    @app.errorhandler(500)
+    def internal_error(_error):
+        logger.exception("Erreur serveur")
+        return jsonify({"error": "Erreur interne du serveur."}), 500
 
+    @app.route("/")
+    def home():
+        return jsonify(
+            {
+                "service": "Chatbot Vocal",
+                "status": "actif",
+                "endpoints": [
+                    "GET /health",
+                    "POST /api/transcribe",
+                    "GET /api/transcriptions",
+                    "GET /api/transcriptions/<id>",
+                    "PATCH /api/transcriptions/<id>",
+                    "GET /api/transcriptions/<id>/export/<fmt>",
+                ],
+            }
+        )
 
-@app.route("/api/transcriptions/<transcription_id>", methods=["GET"])
-def get_transcription(transcription_id):
-    with _history_lock:
-        history = load_history()
-    for entry in history:
-        if entry["id"] == transcription_id:
-            entry["download_url"] = f"/api/transcriptions/{entry['id']}/download"
-            return jsonify(entry)
-    return jsonify({"error": "Transcription introuvable."}), 404
-
-
-@app.route("/api/transcriptions/<transcription_id>/download", methods=["GET"])
-def download_transcription(transcription_id):
-    with _history_lock:
-        history = load_history()
-    entry = next((item for item in history if item["id"] == transcription_id), None)
-    if entry is None:
-        return jsonify({"error": "Transcription introuvable."}), 404
-    document_path = os.path.join(TRANSCRIPTIONS_DIR, entry["filename"])
-    if not os.path.exists(document_path):
-        return jsonify({"error": "Document Word manquant sur le serveur."}), 410
-    # send_from_directory empêche les attaques par traversée de chemin
-    return send_from_directory(
-        TRANSCRIPTIONS_DIR,
-        entry["filename"],
-        as_attachment=True,
-        download_name=entry["filename"],
-    )
+    return app
 
 
-def _delete_entry(entry):
-    document_path = os.path.join(TRANSCRIPTIONS_DIR, entry.get("filename", ""))
-    if os.path.exists(document_path):
-        os.unlink(document_path)
-
-
-@app.route("/api/transcriptions/<transcription_id>", methods=["DELETE"])
-def delete_transcription(transcription_id):
-    with _history_lock:
-        history = load_history()
-        entry = next((item for item in history if item["id"] == transcription_id), None)
-        if entry is None:
-            return jsonify({"error": "Transcription introuvable."}), 404
-        _delete_entry(entry)
-        history = [item for item in history if item["id"] != transcription_id]
-        save_history(history)
-    return "", 204
-
-
-@app.route("/api/transcriptions", methods=["DELETE"])
-def clear_transcriptions():
-    with _history_lock:
-        history = load_history()
-        for entry in history:
-            _delete_entry(entry)
-        save_history([])
-    return "", 204
-
-
-@app.errorhandler(413)
-def file_too_large(_error):
-    return (
-        jsonify(
-            {"error": f"Fichier trop volumineux (limite : {MAX_CONTENT_LENGTH_MB} Mo)."}
-        ),
-        413,
-    )
-
-
-@app.errorhandler(404)
-def not_found(_error):
-    return jsonify({"error": "Ressource introuvable."}), 404
-
-
-@app.errorhandler(500)
-def internal_error(_error):
-    logger.exception("Erreur serveur")
-    return jsonify({"error": "Erreur interne du serveur."}), 500
-
-
-@app.route("/")
-def home():
-    return jsonify(
-        {
-            "service": "Chatbot Vocal",
-            "status": "actif",
-            "endpoints": [
-                "GET /health",
-                "POST /api/transcribe",
-                "GET /api/transcriptions",
-                "GET /api/transcriptions/<id>/download",
-            ],
-        }
-    )
+app = create_app()
 
 
 if __name__ == "__main__":
