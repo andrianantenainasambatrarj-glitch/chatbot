@@ -46,11 +46,13 @@ Flask (port 5001)
 
 ## ✅ Prérequis
 
-- **Python 3.10+**, **Node.js 18+**
+- **Python 3.10 à 3.12** recommandé (3.11 ou 3.12 sur Windows pour disposer de
+  paquets précompilés ; si vous utilisez Python 3.13 : `pip install audioop-lts`)
+- **Node.js 18+**
 - **ffmpeg** :
+  - Windows : `winget install Gyan.FFmpeg` (puis rouvrir le terminal), ou <https://ffmpeg.org/download.html>
   - Ubuntu/Debian : `sudo apt install -y ffmpeg`
   - macOS : `brew install ffmpeg`
-  - Windows : <https://ffmpeg.org/download.html> (à ajouter au `PATH`)
 
 ## 🚀 Démarrage en développement
 
@@ -148,7 +150,7 @@ hors-ligne** (les réponses sont plus simples mais aucune donnée ne sort du ser
 ```bash
 pip install -r requirements-dev.txt
 ruff check .
-python -m pytest tests/ -v          # 35 tests (Vosk/ffmpeg mockés)
+python -m pytest tests/ -v          # 54 tests (Vosk/ffmpeg mockés)
 
 cd frontend
 npx eslint src
@@ -162,6 +164,9 @@ Le tout est exécuté par **GitHub Actions** : la définition est fournie dans
 
 ## 📦 Notes de production
 
+- Installez les dépendances de serveur Linux avec `pip install -r requirements-prod.txt`
+  (gunicorn, gevent, gevent-websocket ; ces paquets ne sont pas utiles — et ne
+  compilent pas toujours — sous Windows en développement)
 - Serveur WebSocket : `gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker ...`
   (déjà configuré dans le `Dockerfile`)
 - Changez impérativement `JWT_SECRET_KEY` ; avec plusieurs workers/processus,
@@ -194,8 +199,9 @@ audio_pipeline.py     # conversion ffmpeg
 exporters.py          # DOCX, PDF, TXT, SRT
 engines/              # vosk_engine.py, whisper_engine.py
 tests/                # pytest (54 tests)
-scripts/download_model.py
-Dockerfile · docker-compose.yml · .github/workflows/ci.yml
+scripts/  # download_model.py + setup/run (.sh et .bat)
+Dockerfile · docker-compose.yml · docs/ci/github-actions.yml
+requirements.txt (dev/local) · requirements-prod.txt (gunicorn+gevent, Linux)
 frontend/src/         # App, AuthScreen, LiveMode, CommandMic, DashboardView,
                       # TranscriptionActions, api/i18n/speech/audioStream
 ```

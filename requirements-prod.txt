@@ -1,0 +1,9 @@
+# Dépendances de production Linux (serveur gunicorn + WebSockets gevent).
+# Non nécessaires en développement : le serveur Flask de développement
+# utilise simple-websocket (présent dans requirements.txt).
+-r requirements.txt
+
+gunicorn==23.0.0
+# >= 24.11.1 pour disposer de roues précompilées avec Python 3.13
+gevent>=24.11.1
+gevent-websocket==0.10.1

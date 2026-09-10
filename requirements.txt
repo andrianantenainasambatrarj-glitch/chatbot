@@ -1,5 +1,12 @@
-# --- Chatbot Vocal : dépendances backend (Python 3.10+) ---
+# --- Chatbot Vocal : dépendances (développement local, Windows/macOS/Linux) ---
 # L'application requiert aussi le binaire système « ffmpeg » (utilisé par pydub).
+#
+# Compatible Python 3.10 à 3.12. Sur Python 3.13, installez aussi :
+#   pip install audioop-lts        (rétro-compat du module audioop supprimé en 3.13)
+# et privilégiez Python 3.11/3.12 sur Windows (roues précompilées pour tout).
+#
+# Pour la production Linux (gunicorn + WebSockets gevent) :
+#   pip install -r requirements-prod.txt
 Flask==3.0.3
 flask-cors==4.0.1
 flask-limiter==3.8.0
@@ -12,10 +19,3 @@ pydub==0.25.1
 reportlab==4.2.2
 simple-websocket==1.1.0
 vosk==0.3.45
-
-# Serveur WSGI asynchrone (requis pour les WebSockets en production)
-gevent==24.2.1
-gevent-websocket==0.10.1
-gunicorn==22.0.0
-
-# Moteur Whisper optionnel (non installé par défaut, voir requirements-whisper.txt)
