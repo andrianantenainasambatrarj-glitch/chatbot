@@ -156,7 +156,9 @@ npm test -- --watchAll=false
 npm run build
 ```
 
-Le tout est exécuté par **GitHub Actions** (`.github/workflows/ci.yml`).
+Le tout est exécuté par **GitHub Actions** : la définition est fournie dans
+[`docs/ci/github-actions.yml`](docs/ci/github-actions.yml) (voir
+[`docs/ci/README.md`](docs/ci/README.md) pour l'activer en une copie).
 
 ## 📦 Notes de production
 
