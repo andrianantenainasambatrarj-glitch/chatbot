@@ -231,11 +231,25 @@ Il s'agit aujourd'hui davantage d'un **transcripteur vocal** que d'un « chatbot
 17. ✅ **PWA** (service worker, manifest, mode hors-ligne), **i18n FR/EN** (i18next), accessibilité (skip-link, ARIA live, focus visibles, rôles tab) ; un vrai design system de composants reste souhaitable (F28–F32 partiel)
     - Backend découpé en modules + **35 tests pytest** ; worker **gevent-websocket** pour gunicorn/Docker ; proxy WebSocket dans nginx
 
-### Sprint 4 — Différenciation (« chatbot » assumé) 🟢
-18. Résumés, actions à faire, mots-clés, conversation avec un LLM sur la transcription (F19, F20)
-19. Synthèse vocale de réponse et commandes vocales (F21, F22)
-20. Diarisation, partage de liens, intégrations (Drive, Notion, e-mail), tableau de bord
-21. Option SaaS : facturation Stripe, quotas, espace admin, monitoring complet
+### Sprint 4 — Différenciation (« chatbot » assumé) ✅ LIVRÉ (2026-09-10) 🟢
+18. ✅ **Analyses NLP** (`nlp/`) : résumé extractif, actions à faire, mots-clés, tonalité
+    100 % hors-ligne, avec bascule optionnelle sur un **LLM compatible OpenAI/Ollama**
+    (`LLM_API_KEY`) ; **chat questions/réponses** sur la transcription (LLM ou repli
+    par similarité) (F19, F20)
+19. ✅ **Synthèse vocale** via la Web Speech API (lecture du texte et des réponses) et
+    **commandes vocales** via WebSocket `/ws/commands` (FR/EN, 15 commandes :
+    enregistrement, mode sombre, tableau de bord, téléchargements, langues, déconnexion…) (F21, F22)
+20. ✅ **Diarisation** par silences (Intervenant 1/2, option `diarize`) ; **partage par
+    lien** signé expirable avec routes publiques `/api/shared/<token>` ; **e-mail SMTP**
+    avec DOCX/PDF joints et **webhooks** (n8n/Zapier/Notion) ; **tableau de bord**
+    (activité 30 jours, minutes, moteurs, langues) (F7, F17, F33)
+21. ✅ Quotas mensuels par utilisateur (402 quand dépassés), **espace admin** (rôles,
+    quotas, totaux), **métriques Prometheus** `/metrics`, migration automatique SQLite ;
+    **facturation Stripe expressément exclue du périmètre**
+
+Reste disponible pour la suite (au choix) : OAuth Google/Microsoft, pyannote.audio pour
+une diarisation par empreinte vocale, Celery/Redis pour la montée en charge multi-processus,
+intégrations natives Drive/Notion/OAuth, design system de composants et E2E Playwright.
 
 ---
 

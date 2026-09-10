@@ -71,3 +71,32 @@ class Config:
 
     # Langue des métadonnées d'export (conservée pour compatibilité)
     LANGUAGE = DEFAULT_LANGUAGE
+
+    # Diarisation légère (changement d'intervenant sur les silences)
+    DIARIZE_GAP_SECONDS = float(os.environ.get("DIARIZE_GAP_SECONDS", "0.9"))
+
+    # Quotas : minutes d'audio par utilisateur et par mois (0 = illimité)
+    DEFAULT_QUOTA_MINUTES = int(os.environ.get("DEFAULT_QUOTA_MINUTES", "0"))
+
+    # Comptes administrateurs (e-mails séparés par des virgules)
+    ADMIN_EMAILS = [
+        email.strip().lower()
+        for email in os.environ.get("ADMIN_EMAILS", "").split(",")
+        if email.strip()
+    ]
+
+    # Grand modèle de langage optionnel (API compatible OpenAI, dont Ollama)
+    LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
+    LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1")
+    LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+
+    # Envoi d'e-mails SMTP
+    SMTP_HOST = os.environ.get("SMTP_HOST", "")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_USER = os.environ.get("SMTP_USER", "")
+    SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+    SMTP_FROM = os.environ.get("SMTP_FROM", "")
+    SMTP_USE_SSL = _bool("SMTP_USE_SSL", default=False)
+
+    # Métriques Prometheus (jeton obligatoire s'il est défini)
+    METRICS_TOKEN = os.environ.get("METRICS_TOKEN", "")

@@ -62,6 +62,20 @@ def current_user():
     return getattr(g, "current_user", None)
 
 
+def require_admin(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = user_from_token(_bearer_token())
+        if user is None:
+            return jsonify({"error": "Authentification requise."}), 401
+        if not user.is_admin:
+            return jsonify({"error": "Accès réservé aux administrateurs."}), 403
+        g.current_user = user
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
 @auth_bp.post("/register")
 @limiter.limit(lambda: current_app.config["RATELIMIT_AUTH"])
 def register():
@@ -79,7 +93,12 @@ def register():
     if db.session.query(User).filter_by(email=email).first():
         return jsonify({"error": "Un compte existe déjà avec cet e-mail."}), 409
 
-    user = User(email=email)
+    user = User(
+        email=email,
+        monthly_quota_minutes=current_app.config["DEFAULT_QUOTA_MINUTES"] or None,
+    )
+    if email in current_app.config["ADMIN_EMAILS"]:
+        user.role = "admin"
     user.set_password(password)
     db.session.add(user)
     db.session.commit()
@@ -96,6 +115,10 @@ def login():
     user = db.session.query(User).filter_by(email=email).first()
     if user is None or not user.check_password(password):
         return jsonify({"error": "E-mail ou mot de passe incorrect."}), 401
+    # Le droit d'administrateur peut être accordé a posteriori via ADMIN_EMAILS
+    if email in current_app.config["ADMIN_EMAILS"] and not user.is_admin:
+        user.role = "admin"
+        db.session.commit()
     return jsonify({"token": make_token(user), "user": user.to_dict()})
 
 

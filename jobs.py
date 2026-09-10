@@ -1,9 +1,9 @@
 """Traitement asynchrone des gros fichiers audio.
 
 Un exécuteur en threads (ThreadPoolExecutor) traite les tâches en arrière-plan
-avec suivi de progression dans la base. Pour un déploiement multi-processus,
-cette brique se remplace par Celery/RQ + Redis (le schéma de la table Job et
-l'API REST restent identiques).
+avec suivi de progression dans la base. Pour du multi-processus, cette brique
+se remplace par Celery/RQ + Redis (le schéma de la table Job et l'API REST
+restent identiques).
 """
 
 import logging
@@ -11,14 +11,17 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from flask import current_app
+
 from models import (
     JOB_DONE,
     JOB_ERROR,
     JOB_PROCESSING,
     Job,
+    User,
     db,
 )
-from services import transcribe_file
+from services import QuotaExceededError, transcribe_file
 
 logger = logging.getLogger("chatbot-vocal")
 
@@ -38,13 +41,16 @@ class JobRunner:
             job = db.session.get(Job, job_id)
             if job is None:
                 return
+            user = db.session.get(User, job.user_id)
             job.status = JOB_PROCESSING
             job.progress = 1
             job.message = "Conversion et reconnaissance en cours..."
             db.session.commit()
+            metrics = current_app.extensions.get("metrics")
+            if metrics:
+                metrics.incr("jobs_total")
 
             def progress(percent):
-                # Évite des commit trop fréquents
                 with self._lock:
                     if percent - (job.progress or 0) >= 5 or percent >= 100:
                         job.progress = percent
@@ -52,10 +58,11 @@ class JobRunner:
 
             try:
                 transcription = transcribe_file(
-                    user_id=job.user_id,
+                    user=user,
                     audio_path=audio_path,
                     engine=job.engine,
                     language=job.language,
+                    diarization=job.diarize,
                     progress=progress,
                 )
                 job.status = JOB_DONE
@@ -64,13 +71,18 @@ class JobRunner:
                 job.transcription_id = transcription.id
                 db.session.commit()
                 logger.info("Tâche %s terminée", job_id)
-            except Exception as exc:  # noqa: BLE001 - on veut tracer toute erreur de tâche
+            except Exception as exc:  # noqa: BLE001 - tracer toute erreur de tâche
                 db.session.rollback()
                 job = db.session.get(Job, job_id)
                 job.status = JOB_ERROR
                 job.error = str(exc)
-                job.message = "Échec de la transcription"
+                if isinstance(exc, QuotaExceededError):
+                    job.message = "Quota dépassé"
+                else:
+                    job.message = "Échec de la transcription"
                 db.session.commit()
+                if metrics:
+                    metrics.incr("jobs_failed_total")
                 logger.exception("Tâche %s en échec", job_id)
             finally:
                 if audio_path and os.path.exists(audio_path):

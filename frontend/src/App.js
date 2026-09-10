@@ -3,8 +3,12 @@ import { useTranslation } from 'react-i18next';
 import './i18n';
 import './styles.css';
 import { apiFetch, authApi, clearToken, getToken } from './api';
+import { stopSpeaking } from './speech';
 import AuthScreen from './AuthScreen';
 import LiveMode from './LiveMode';
+import CommandMic from './CommandMic';
+import DashboardView from './DashboardView';
+import TranscriptionActions from './TranscriptionActions';
 
 const ACCEPTED_AUDIO = '.wav,.mp3,.m4a,.ogg,.oga,.webm,.mp4,.flac,.aac,.opus,audio/*';
 
@@ -21,23 +25,20 @@ function formatTime(totalSeconds) {
 function App() {
   const { t, i18n } = useTranslation();
 
-  // ----- Authentification
   const [user, setUser] = useState(null);
   const [authChecking, setAuthChecking] = useState(!!getToken());
 
-  // ----- Configuration moteur / langue
   const [engines, setEngines] = useState([]);
   const [engine, setEngine] = useState('vosk');
   const [language, setLanguage] = useState('fr');
-  const [tab, setTab] = useState('standard'); // standard | live
+  const [diarize, setDiarize] = useState(false);
+  const [tab, setTab] = useState('standard');
 
-  // ----- Enregistrement
-  const [phase, setPhase] = useState('idle'); // idle | recording | paused | review | processing
+  const [phase, setPhase] = useState('idle');
   const [elapsed, setElapsed] = useState(0);
   const [previewUrl, setPreviewUrl] = useState('');
   const [job, setJob] = useState(null);
 
-  // ----- Résultats
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
@@ -53,13 +54,14 @@ function App() {
   const previewUrlRef = useRef('');
   const fileInputRef = useRef(null);
   const pollRef = useRef(null);
+  const commandMicKeyRef = useRef(0);
+  const [commandMicKey, setCommandMicKey] = useState(0);
 
   const mediaSupported =
     typeof navigator !== 'undefined' &&
     !!navigator.mediaDevices &&
     typeof window.MediaRecorder !== 'undefined';
 
-  // ------------------------------------------------------------------
   const showError = useCallback((message) => {
     setError(message);
     setStatus('');
@@ -80,18 +82,17 @@ function App() {
   }, [handle401]);
 
   const fetchEngines = useCallback(() => {
-    apiFetch('/api/engines')
-      .then(setEngines)
-      .catch((err) => console.error('Moteurs indisponibles :', err));
+    apiFetch('/api/engines').then(setEngines).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!getToken()) return;
+    if (!getToken()) return undefined;
     authApi
       .me()
       .then(setUser)
       .catch(() => clearToken())
       .finally(() => setAuthChecking(false));
+    return undefined;
   }, []);
 
   useEffect(() => {
@@ -108,9 +109,10 @@ function App() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     streamRef.current?.getTracks().forEach((tr) => tr.stop());
+    stopSpeaking();
   }, []);
 
-  const activeEngineMeta = engines.find((e) => e.name === engine);
+  const activeEngineMeta = engines.find((meta) => meta.name === engine);
   const languageOptions = activeEngineMeta?.languages || [{ code: 'fr', available: true }];
 
   const setPreview = (blob) => {
@@ -126,12 +128,11 @@ function App() {
   };
 
   const logout = () => {
+    stopSpeaking();
     clearToken();
     setUser(null);
   };
 
-  // ------------------------------------------------------------------
-  // Enregistrement micro
   // ------------------------------------------------------------------
   const startRecording = () => {
     setError('');
@@ -200,13 +201,9 @@ function App() {
     });
     const mime = blob.type || 'audio/webm';
     const ext = mime.includes('ogg') ? 'ogg' : mime.includes('mp4') ? 'mp4' : 'webm';
-    // Les petits enregistrements passent en synchrone
     sendAudio(blob, `enregistrement.${ext}`, false);
   };
 
-  // ------------------------------------------------------------------
-  // Upload fichier -> systématiquement asynchrone avec progression
-  // ------------------------------------------------------------------
   const onFileSelected = (event) => {
     const file = event.target.files?.[0];
     if (file) sendAudio(file, file.name, true);
@@ -223,6 +220,7 @@ function App() {
     formData.append('audio', blobOrFile, filename);
     formData.append('engine', engine);
     formData.append('language', language);
+    if (diarize) formData.append('diarize', '1');
     if (asyncMode) formData.append('async', '1');
 
     apiFetch('/api/transcribe', { method: 'POST', body: formData })
@@ -275,6 +273,18 @@ function App() {
     fetchHistory();
   };
 
+  const openHistoryItem = async (item) => {
+    try {
+      const detail = await apiFetch(`/api/transcriptions/${item.id}`);
+      setCurrent(detail);
+      setEditedText(detail.text);
+      setTab('standard');
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    } catch (err) {
+      showError(err.message);
+    }
+  };
+
   // ------------------------------------------------------------------
   const saveEdits = () => {
     if (!current) return;
@@ -317,17 +327,8 @@ function App() {
       .catch((err) => showError(err.message));
   };
 
-  const exportUrl = (item, fmt) => (item?.exports?.[fmt] ? `${item.exports[fmt]}` : '');
+  const exportUrl = (item, fmt) => item?.exports?.[fmt] || '';
 
-  const exportLabel = (fmt) =>
-    ({
-      docx: `📄 ${t('exportWord')}`,
-      pdf: `📕 ${t('exportPdf')}`,
-      txt: `📝 ${t('exportTxt')}`,
-      srt: `💬 ${t('exportSrt')}`,
-    }[fmt]);
-
-  // Les liens de téléchargement passent par un fetch authentifié (jeton en en-tête)
   const downloadExport = async (item, fmt) => {
     const response = await fetch(exportUrl(item, fmt), {
       headers: { Authorization: `Bearer ${getToken()}` },
@@ -343,6 +344,49 @@ function App() {
   };
 
   // ------------------------------------------------------------------
+  // Exécution des commandes vocales
+  // ------------------------------------------------------------------
+  const handleVoiceCommand = useCallback((command) => {
+    const restartCommandMic = () => {
+      commandMicKeyRef.current += 1;
+      setCommandMicKey(commandMicKeyRef.current);
+    };
+    switch (command) {
+      case 'new_recording':
+        setTab('standard');
+        discardRecording();
+        setTimeout(startRecording, 200);
+        break;
+      case 'live_mode': setTab('live'); break;
+      case 'standard_mode': setTab('standard'); break;
+      case 'dashboard': setTab('dashboard'); break;
+      case 'history': setTab('standard'); break;
+      case 'dark_mode': setDarkMode(true); break;
+      case 'light_mode': setDarkMode(false); break;
+      case 'language_french': i18n.changeLanguage('fr'); setLanguage('fr'); break;
+      case 'language_english': i18n.changeLanguage('en'); setLanguage('en'); break;
+      case 'logout': logout(); break;
+      case 'clear_history': clearHistory(); break;
+      case 'download_word':
+        if (current) downloadExport(current, 'word').catch(showError);
+        break;
+      case 'download_pdf':
+        if (current) downloadExport(current, 'pdf').catch(showError);
+        break;
+      case 'insights':
+        setTab('standard');
+        break;
+      case 'listen':
+        if (current) import('./speech').then((module) => module.speak(current.text, language));
+        break;
+      default:
+        break;
+    }
+    restartCommandMic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, language, i18n]);
+
+  // ------------------------------------------------------------------
   if (authChecking) {
     return <div className="app"><div className="centered-loader"><div className="loader"></div></div></div>;
   }
@@ -350,12 +394,19 @@ function App() {
     return (
       <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
         <LanguageSwitch i18n={i18n} />
-        <AuthScreen onAuthed={(u) => { setUser(u); fetchEngines(); fetchHistory(); }} />
+        <AuthScreen onAuthed={(authedUser) => { setUser(authedUser); fetchEngines(); fetchHistory(); }} />
       </div>
     );
   }
 
   const busy = phase === 'processing';
+  const exportLabel = (fmt) =>
+    ({
+      docx: `📄 ${t('exportWord')}`,
+      pdf: `📕 ${t('exportPdf')}`,
+      txt: `📝 ${t('exportTxt')}`,
+      srt: `💬 ${t('exportSrt')}`,
+    }[fmt]);
 
   return (
     <div className={`app ${darkMode ? 'dark-mode' : ''}`}>
@@ -367,12 +418,13 @@ function App() {
           <button className="theme-toggle" onClick={() => setDarkMode(!darkMode)} aria-pressed={darkMode}>
             {darkMode ? '☀️' : '🌙'}
           </button>
+          <span className="user-email" title={user.email}>{user.email}</span>
+          {user.role === 'admin' && <span className="admin-badge">ADMIN</span>}
           <button className="secondary-button small" onClick={logout}>{t('auth.logout')}</button>
         </div>
       </header>
 
       <main id="main" className="main-content">
-        {/* Sélecteurs moteur / langue */}
         <div className="selectors">
           <label className="selector">
             <span>{t('engine')}</span>
@@ -400,42 +452,58 @@ function App() {
               ))}
             </select>
           </label>
+          <label className="selector checkbox-selector">
+            <span>{t('diarize')}</span>
+            <input
+              type="checkbox"
+              checked={diarize}
+              onChange={(e) => setDiarize(e.target.checked)}
+            />
+          </label>
         </div>
 
-        {/* Onglets */}
         <div className="tabs" role="tablist">
-          <button
-            role="tab"
-            aria-selected={tab === 'standard'}
+          <button role="tab" aria-selected={tab === 'standard'}
             className={`tab ${tab === 'standard' ? 'active' : ''}`}
-            onClick={() => setTab('standard')}
-          >
-            🎙️ {t('modeStandard')}
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === 'live'}
+            onClick={() => setTab('standard')}>🎙️ {t('modeStandard')}</button>
+          <button role="tab" aria-selected={tab === 'live'}
             className={`tab ${tab === 'live' ? 'active' : ''}`}
-            onClick={() => setTab('live')}
-            disabled={engine === 'whisper'}
-            title={engine === 'whisper' ? t('live.unsupported') : ''}
-          >
+            onClick={() => setTab('live')} disabled={engine === 'whisper'}
+            title={engine === 'whisper' ? t('live.unsupported') : ''}>
             📡 {t('modeLive')}
           </button>
+          <button role="tab" aria-selected={tab === 'commands'}
+            className={`tab ${tab === 'commands' ? 'active' : ''}`}
+            onClick={() => setTab('commands')} disabled={engine === 'whisper'}>
+            🗣️ {t('modeCommands')}
+          </button>
+          <button role="tab" aria-selected={tab === 'dashboard'}
+            className={`tab ${tab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setTab('dashboard')}>📊 {t('modeDashboard')}</button>
         </div>
 
         {error && <div className="error-message" role="alert">⚠️ {error}</div>}
 
-        {tab === 'live' ? (
+        {tab === 'live' && (
           <LiveMode
             language={language}
             onError={showError}
-            onSaved={(transcription) => {
-              applyNewTranscription(transcription);
-              setStatus(t('live.saved'));
-            }}
+            onSaved={(transcription) => { applyNewTranscription(transcription); setStatus(t('live.saved')); }}
           />
-        ) : (
+        )}
+
+        {tab === 'commands' && (
+          <CommandMic
+            key={commandMicKey}
+            language={language}
+            onError={showError}
+            onCommand={handleVoiceCommand}
+          />
+        )}
+
+        {tab === 'dashboard' && <DashboardView user={user} />}
+
+        {tab === 'standard' && (
           <section className="controls">
             <p className="subtitle">{t('tagline')}</p>
 
@@ -522,29 +590,42 @@ function App() {
         <div className="result" aria-live="polite">{status}</div>
 
         {current && (
-          <div className="transcription-card">
+          <div className="transcription-card" id="current-transcription">
             <h3>
               {t('transcriptionTitle')}
               {current.duration_seconds
                 ? ` · ${t('duration', { time: formatTime(Math.round(current.duration_seconds)) })}`
                 : ''}
               {' '}· {current.engine} · {current.language.toUpperCase()}
+              {current.diarized ? ` · ${current.speakers?.length || 0} 🎤` : ''}
             </h3>
-            <textarea
-              className="transcription-editor"
-              value={editedText}
-              onChange={(e) => setEditedText(e.target.value)}
-              rows={Math.min(12, Math.max(4, editedText.split('\n').length))}
-              aria-label={t('transcriptionTitle')}
-            />
+            {current.diarized && current.speakers ? (
+              <div className="speakers">
+                {current.speakers.map((turn, index) => (
+                  <p key={index} className={`speaker-turn speaker-${turn.speaker}`}>
+                    <strong>{t('speaker', { n: turn.speaker })} :</strong> {turn.text}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <textarea
+                className="transcription-editor"
+                value={editedText}
+                onChange={(e) => setEditedText(e.target.value)}
+                rows={Math.min(12, Math.max(4, editedText.split('\n').length))}
+                aria-label={t('transcriptionTitle')}
+              />
+            )}
             <div className="button-row wrap">
-              <button
-                className="secondary-button"
-                onClick={saveEdits}
-                disabled={isSaving || editedText.trim() === current.text}
-              >
-                💾 {t('saveEdits')}
-              </button>
+              {!current.diarized && (
+                <button
+                  className="secondary-button"
+                  onClick={saveEdits}
+                  disabled={isSaving || editedText.trim() === current.text}
+                >
+                  💾 {t('saveEdits')}
+                </button>
+              )}
               {['docx', 'pdf', 'txt', ...(current.has_timestamps ? ['srt'] : [])].map((fmt) => (
                 <button
                   key={fmt}
@@ -555,6 +636,7 @@ function App() {
                 </button>
               ))}
             </div>
+            <TranscriptionActions transcription={current} language={language} />
           </div>
         )}
 
@@ -572,10 +654,14 @@ function App() {
                     <strong>{new Date(item.created_at).toLocaleString()}</strong>
                     <button className="icon-button" title="✕" onClick={() => deleteItem(item.id)}>✕</button>
                   </div>
-                  <p className="history-meta">{item.engine} · {item.language.toUpperCase()}
-                    {item.duration_seconds ? ` · ${formatTime(Math.round(item.duration_seconds))}` : ''}</p>
+                  <p className="history-meta">
+                    {item.engine} · {item.language.toUpperCase()}
+                    {item.duration_seconds ? ` · ${formatTime(Math.round(item.duration_seconds))}` : ''}
+                    {item.diarized ? ' · 🎤' : ''}
+                  </p>
                   <p className="history-text">{item.text}</p>
                   <div className="history-exports">
+                    <button className="open-item" onClick={() => openHistoryItem(item)}>📂</button>
                     {['docx', 'pdf', 'txt', ...(item.has_timestamps ? ['srt'] : [])].map((fmt) => (
                       <button key={fmt} onClick={() => downloadExport(item, fmt).catch(showError)}>
                         {fmt.toUpperCase()}

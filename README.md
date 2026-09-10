@@ -7,16 +7,26 @@ et génère des documents **Word, PDF, TXT et sous-titres SRT**.
 
 ## ✨ Fonctionnalités
 
-- 🔐 **Comptes utilisateurs** (JWT) : chaque transcription est privée
+- 🔐 **Comptes utilisateurs** (JWT), rôles **admin**, **quotas mensuels** ; transcriptions privées
 - 📡 **Transcription en temps réel** par WebSocket (texte qui apparaît pendant la parole)
+- 🗣️ **Commandes vocales** : « nouvel enregistrement », « mode sombre », « télécharger word »,
+  « tableau de bord », « résumé », « déconnexion »… (WebSocket `/ws/commands`, FR/EN)
+- 🎙️ **Diarisation légère** : séparation Intervenant 1 / Intervenant 2 sur les silences
+- 🧠 **Analyse automatique** : résumé extractif, actions à faire, mots-clés, tonalité
+  (100 % hors-ligne), ou via un **LLM** optionnel compatible OpenAI / Ollama
+- 💬 **Chat questions/réponses** sur chaque transcription (LLM ou recherche de similarité)
+- 🔊 **Synthèse vocale** (lecture audio du texte et des réponses, Web Speech API)
+- 🔗 **Partage par lien** signé et expirable (30 jours, lecture publique sans compte)
+- ✉️ Envoi par **e-mail** (SMTP) et **webhooks** (n8n, Zapier, Notion…)
+- 📊 **Tableau de bord** : activité, minutes, moteurs, langues ; **espace admin** (rôles, quotas)
 - 🎤 Enregistrement avec **chronomètre, pause/reprise et réécoute avant l'envoi**
 - 📁 Import multi-formats : WAV, MP3, M4A, OGG, WEBM, MP4, FLAC, AAC, OPUS, WMA
 - ⏳ Gros fichiers traités **en arrière-plan avec barre de progression** (file de tâches)
 - 🌍 **Multilingue et multi-moteurs** : Vosk (streaming, hors-ligne) ou faster-whisper
 - 📝 Texte **éditable** ; exports **DOCX / PDF / TXT / SRT** (mots horodatés)
-- 🗄️ Persistance en **SQLite/PostgreSQL** (SQLAlchemy)
+- 🗄️ Persistance en **SQLite/PostgreSQL** (SQLAlchemy, migration automatique SQLite)
 - 🇫🇷🇬🇧 Interface bilingue **FR/EN**, mode sombre, **PWA** installable
-- 🔒 Rate limiting, CORS restreint, validation des formats ; Docker + CI
+- 📈 Métriques **Prometheus** (`/metrics`), rate limiting, CORS, Docker + CI
 
 ## 🏗️ Architecture
 
@@ -92,13 +102,23 @@ exigent un en-tête `Authorization: Bearer <jeton>`.
 | `POST` | `/api/auth/login` | Connexion, renvoie un jeton |
 | `GET` | `/api/auth/me` | Utilisateur courant |
 | `GET` | `/api/engines` | Moteurs et langues disponibles |
-| `POST` | `/api/transcribe` | Champ `audio` + `engine`, `language`, `async` → 201 ou **202 + tâche** |
+| `POST` | `/api/transcribe` | Champ `audio` + `engine`, `language`, `diarize`, `async` → 201 ou **202 + tâche** (402 si quota dépassé) |
 | `GET` | `/api/jobs` · `/api/jobs/<id>` | Suivi des tâches (`status`, `progress`, résultat) |
 | `GET` | `/api/transcriptions` | Liste de l'utilisateur (récent d'abord) |
 | `GET/PATCH/DELETE` | `/api/transcriptions/<id>` | Détail, édition de texte, suppression |
 | `DELETE` | `/api/transcriptions` | Vide l'historique de l'utilisateur |
 | `GET` | `/api/transcriptions/<id>/export/<docx\|pdf\|txt\|srt>` | Téléchargement |
-| `WS` | `/ws/transcribe?token=<jwt>&language=fr` | Temps réel : trames PCM 16 kHz, messages JSON `ready/partial/final/error` |
+| `POST/GET` | `/api/transcriptions/<id>/insights` | Résumé, actions, mots-clés, tonalité |
+| `POST` | `/api/transcriptions/<id>/chat` | `{message, history}` → réponse sur le contenu |
+| `POST/GET/DELETE` | `/api/transcriptions/<id>/share[/<token>]` | Gestion des liens de partage |
+| `GET` | `/api/shared/<token>[/export/<fmt>]` | **Public** : lecture/téléchargement via un lien |
+| `POST` | `/api/transcriptions/<id>/email` | Envoi par e-mail `{email}` (SMTP) |
+| `POST` | `/api/transcriptions/<id>/webhook` | Publication JSON `{url}` |
+| `GET` | `/api/stats` | Tableau de bord de l'utilisateur |
+| `GET/PATCH` | `/api/admin/users[/<id>]`, `/api/admin/stats` | **Admin** : rôles et quotas |
+| `GET` | `/metrics` | Métriques Prometheus (optionnel : `METRICS_TOKEN`) |
+| `WS` | `/ws/transcribe?token=<jwt>&language=fr` | Temps réel : trames PCM 16 kHz, messages `ready/partial/final/error` |
+| `WS` | `/ws/commands?token=<jwt>&language=fr` | Commandes vocales : messages `command/heard/partial` |
 
 Exemple :
 
@@ -115,8 +135,13 @@ curl -X POST -F "audio=@entretien.mp3" -F "engine=vosk" -F "language=fr" \
 
 Voir `.env.example` : `JWT_SECRET_KEY`, `DATABASE_URL`, `VOSK_MODELS`,
 `DEFAULT_ENGINE`, `ASYNC_THRESHOLD_MB`, `WHISPER_*`, `RATELIMIT_*`,
-`CORS_ORIGINS`, `MAX_CONTENT_LENGTH_MB`. Côté frontend : `REACT_APP_API_URL`
-(dans `frontend/.env.example`).
+`CORS_ORIGINS`, `MAX_CONTENT_LENGTH_MB`, `DEFAULT_QUOTA_MINUTES`,
+`ADMIN_EMAILS`, `LLM_API_KEY`/`LLM_BASE_URL`/`LLM_MODEL` (ou Ollama en local),
+`SMTP_*`, `METRICS_TOKEN`, `DIARIZE_GAP_SECONDS`. Côté frontend :
+`REACT_APP_API_URL` (dans `frontend/.env.example`).
+
+Sans `LLM_API_KEY`, les analyses et le chat utilisent un moteur **extractif
+hors-ligne** (les réponses sont plus simples mais aucune donnée ne sort du serveur).
 
 ## 🧪 Tests et qualité
 
@@ -151,17 +176,24 @@ SaaS, multi-locataire…).
 ```
 chatbot.py            # factory Flask + routes REST
 config.py             # configuration par variables d'environnement
-auth.py               # JWT, inscription / connexion
+auth.py               # JWT, inscription/connexion, décorateurs user/admin
 ratelimit.py          # Flask-Limiter
-models.py             # User, Transcription, Job (SQLAlchemy)
-services.py           # pipeline métier : conversion → moteur → exports
+models.py             # User, Transcription, Job, ShareLink (SQLAlchemy)
+migrations.py         # migration automatique SQLite (colonnes de sprint en sprint)
+services.py           # pipeline métier : conversion → moteur → diarisation → exports
 jobs.py               # tâches asynchrones (ThreadPoolExecutor)
-streaming.py          # session WebSocket temps réel
+streaming.py          # WebSockets temps réel : /ws/transcribe et /ws/commands
+diarize.py            # séparation des interlocuteurs par les silences
+commands.py           # motifs de commandes vocales FR/EN
+nlp/                  # analyse extractive hors-ligne, chat, client LLM optionnel
+integrations.py       # e-mail SMTP et webhooks
+metrics.py            # métriques Prometheus
 audio_pipeline.py     # conversion ffmpeg
 exporters.py          # DOCX, PDF, TXT, SRT
 engines/              # vosk_engine.py, whisper_engine.py
-tests/                # pytest
+tests/                # pytest (54 tests)
 scripts/download_model.py
 Dockerfile · docker-compose.yml · .github/workflows/ci.yml
-frontend/             # React : AuthScreen, LiveMode, i18n, PWA (sw.js)
+frontend/src/         # App, AuthScreen, LiveMode, CommandMic, DashboardView,
+                      # TranscriptionActions, api/i18n/speech/audioStream
 ```
