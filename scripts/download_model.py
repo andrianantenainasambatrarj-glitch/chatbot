@@ -16,9 +16,22 @@ import zipfile
 from pathlib import Path
 
 MODELS = {
+    # Français
     "vosk-model-small-fr-0.22": "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip",
     "vosk-model-fr-0.22": "https://alphacephei.com/vosk/models/vosk-model-fr-0.22.zip",
+    # Autres langues (petits modèles)
+    "vosk-model-small-en-us-0.15": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+    "vosk-model-small-es-0.42": "https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip",
+    "vosk-model-small-de-0.15": "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip",
+    "vosk-model-small-it-0.22": "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip",
+    "vosk-model-small-pt-0.3": "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip",
+    "vosk-model-small-nl-0.22": "https://alphacephei.com/vosk/models/vosk-model-small-nl-0.22.zip",
 }
+
+# Après avoir téléchargé un modèle d'une autre langue, déclarez-le dans VOSK_MODELS
+# (variable d'environnement, JSON langue -> chemin), par exemple :
+#   VOSK_MODELS={"fr": "models/vosk-model-small-fr-0.22",
+#                "en": "models/vosk-model-small-en-us-0.15"}
 
 
 def _report_progress(block_num, block_size, total_size):

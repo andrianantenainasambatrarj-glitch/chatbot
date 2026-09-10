@@ -1,10 +1,12 @@
-"""Configuration des tests pytest : application isolée dans un dossier temporaire."""
+"""Configuration des tests pytest : application isolée, moteur et ffmpeg mockés."""
 
 import io
+import json
 
 import pytest
 
 import chatbot
+import services
 from config import Config
 
 WORDS = [
@@ -17,24 +19,66 @@ WORDS = [
 TRANSCRIPT = "bonjour ceci est un test"
 
 
+class FakeRecognizer:
+    """Simule un KaldiRecognizer Vosk."""
+
+    def __init__(self):
+        self.chunks = 0
+        self.words_enabled = False
+
+    def SetWords(self, value):
+        self.words_enabled = value
+
+    def AcceptWaveform(self, _data):
+        self.chunks += 1
+        return self.chunks % 3 == 0  # un résultat final toutes les 3 trames
+
+    def Result(self):
+        if self.chunks % 3 == 0:
+            return json.dumps(
+                {"text": f"partie {self.chunks}", "result": WORDS[:2]}
+            )
+        return json.dumps({})
+
+    def PartialResult(self):
+        return json.dumps({"partial": "transcription partielle"})
+
+    def FinalResult(self):
+        return json.dumps({"text": "texte final", "result": WORDS[2:]})
+
+
+class FakeEngine:
+    name = "vosk"
+
+    def transcribe(self, _wav_path, _language="fr", progress=None):
+        if progress:
+            progress(50)
+            progress(100)
+        return TRANSCRIPT, [dict(w) for w in WORDS]
+
+    def create_recognizer(self, _language):
+        return FakeRecognizer()
+
+    def metadata(self):
+        return {"name": "vosk", "languages": [{"code": "fr", "available": True}]}
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     class TestConfig(Config):
         DATA_DIR = str(tmp_path)
         SQLALCHEMY_DATABASE_URI = f"sqlite:///{tmp_path / 'test.db'}"
         RATELIMIT_ENABLED = False
-        TRANSCRIBE_RESULT = (
-            TRANSCRIPT,
-            [dict(w) for w in WORDS],
-            1.8,
-        )
+        JOB_WORKERS = 2
+        VOSK_MODELS = {"fr": "models/fake-fr", "en": "models/fake-en"}
 
-    # Le pipeline Vosk/ffmpeg est mocké : les tests ne dépendent ni du modèle ni de ffmpeg
-    def fake_pipeline(_src_path, _get_model):
-        return TestConfig.TRANSCRIBE_RESULT
+    def fake_factory(_name=None):
+        return FakeEngine()
 
-    monkeypatch.setattr(chatbot, "prepare_and_transcribe", fake_pipeline)
-    monkeypatch.setattr(chatbot, "get_model", lambda: object())
+    # ffmpeg est mocké : la conversion est considérée comme acquise
+    monkeypatch.setattr(services, "prepare_audio", lambda _src: ("/tmp/fake-converted.wav", 1.8))
+    monkeypatch.setattr(chatbot, "get_engine", fake_factory)
+    monkeypatch.setattr(services, "get_engine", fake_factory)
 
     application = chatbot.create_app(TestConfig)
     yield application
@@ -45,5 +89,20 @@ def client(app):
     return app.test_client()
 
 
-def audio_file(content=b"audio-bidon", filename="recording.webm"):
-    return io.BytesIO(content), filename
+@pytest.fixture
+def register(client):
+    """Crée un compte et retourne les en-têtes d'authentification."""
+
+    def _register(email="alice@example.com", password="motdepasse123"):
+        response = client.post(
+            "/api/auth/register", json={"email": email, "password": password}
+        )
+        assert response.status_code == 201, response.get_json()
+        token = response.get_json()["token"]
+        return {"Authorization": f"Bearer {token}"}
+
+    return _register
+
+
+def audio_bytes(content=b"audio-bidon"):
+    return io.BytesIO(content)

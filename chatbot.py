@@ -1,81 +1,44 @@
 """Backend Flask du Chatbot Vocal.
 
-Fonctionnalités :
-  - transcription de nombreux formats audio (WAV, MP3, M4A, OGG, WEBM...) via Vosk
-  - persistance dans SQLite (SQLAlchemy)
-  - exports DOCX, PDF, TXT et SRT (mots horodatés)
-  - édition de la transcription avant export
-
-Routes principales :
-  GET    /health
-  POST   /api/transcribe
-  GET    /api/transcriptions
-  GET    /api/transcriptions/<id>
-  PATCH  /api/transcriptions/<id>
-  DELETE /api/transcriptions/<id>
-  DELETE /api/transcriptions
-  GET    /api/transcriptions/<id>/export/<docx|pdf|txt|srt>
+Fonctionnalités (Sprints 1 à 3) :
+  - authentification JWT (inscription / connexion), transcriptions privées
+  - transcription Vosk hors-ligne ou Whisper (optionnel), multilingue
+  - fichiers multi-formats, exports DOCX / PDF / TXT / SRT
+  - transcription en temps réel par WebSocket (/ws/transcribe)
+  - gros fichiers traités en tâche asynchrone avec progression (/api/jobs)
 """
 
 import logging
 import os
-import threading
-from datetime import datetime
 from tempfile import NamedTemporaryFile
 
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+from flask_sock import Sock
 
 import exporters
-from audio_pipeline import (
-    AudioDecodeError,
-    ModelUnavailableError,
-    prepare_and_transcribe,
-    validate_extension,
-)
+import services
+import streaming
+from audio_pipeline import AudioDecodeError, validate_extension
+from auth import auth_bp, current_user, require_auth
 from config import Config
-from models import EXPORT_FORMATS, Transcription, db
+from engines import UnknownEngineError, engines_metadata, get_engine
+from engines.vosk_engine import ModelUnavailableError
+from engines.whisper_engine import WhisperUnavailableError
+from jobs import JobRunner
+from models import (
+    JOB_PENDING,
+    Job,
+    Transcription,
+    db,
+)
+from ratelimit import limiter
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("chatbot-vocal")
-
-# Le rate limiter est global (l'extension conserve des références faibles)
-# et configuré par application via init_app() et les clés RATELIMIT_*.
-limiter = Limiter(get_remote_address)
-
-# Le modèle Vosk est chargé une seule fois, au premier appel (lazy loading).
-_model = None
-_model_lock = threading.Lock()
-
-
-def get_model():
-    global _model
-    if _model is None:
-        with _model_lock:
-            if _model is None:
-                if not os.path.isdir(Config.MODEL_PATH):
-                    raise ModelUnavailableError(
-                        f"Le modèle Vosk est introuvable dans '{Config.MODEL_PATH}'. "
-                        "Lancez d'abord : python scripts/download_model.py"
-                    )
-                try:
-                    from vosk import Model
-
-                    logger.info("Chargement du modèle Vosk depuis %s ...", Config.MODEL_PATH)
-                    _model = Model(Config.MODEL_PATH)
-                    logger.info("Modèle Vosk chargé")
-                except ModelUnavailableError:
-                    raise
-                except Exception as exc:
-                    raise ModelUnavailableError(
-                        f"Impossible de charger le modèle Vosk : {exc}"
-                    ) from exc
-    return _model
 
 
 def create_app(config_object=Config):
@@ -84,80 +47,35 @@ def create_app(config_object=Config):
 
     os.makedirs(app.config["DATA_DIR"], exist_ok=True)
     app.config["TRANSCRIPTIONS_DIR"] = os.path.join(app.config["DATA_DIR"], "transcriptions")
+    app.config["UPLOADS_DIR"] = os.path.join(app.config["DATA_DIR"], "uploads")
     os.makedirs(app.config["TRANSCRIPTIONS_DIR"], exist_ok=True)
+    os.makedirs(app.config["UPLOADS_DIR"], exist_ok=True)
 
     db.init_app(app)
     with app.app_context():
         db.create_all()
 
     CORS(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
-
-    # Les clés RATELIMIT_ENABLED / RATELIMIT_STORAGE_URI / RATELIMIT_DEFAULT
-    # sont lues automatiquement dans la configuration Flask par l'extension.
     limiter.init_app(app)
+    app.register_blueprint(auth_bp)
+
+    sock = Sock(app)
+    app.extensions["vosk_engine"] = get_engine("vosk")
+    streaming.register_websocket(sock, app)
+
+    runner = JobRunner(app, max_workers=app.config["JOB_WORKERS"])
+    app.extensions["job_runner"] = runner
 
     # ------------------------------------------------------------------
-    # Services
-    # ------------------------------------------------------------------
+    def owned_transcription_or_404(transcription_id):
+        return (
+            db.session.query(Transcription)
+            .filter_by(id=transcription_id, user_id=current_user().id)
+            .first_or_404()
+        )
+
     def export_paths(base_path):
-        return {fmt: f"{base_path}.{fmt}" for fmt in EXPORT_FORMATS}
-
-    def write_exports(transcription, text, words=None):
-        """Génère les fichiers DOCX, PDF, TXT (et SRT si mots horodatés)."""
-        base_path = os.path.join(app.config["TRANSCRIPTIONS_DIR"], transcription.base_name)
-        kwargs = {
-            "language": transcription.language,
-            "duration_seconds": transcription.duration_seconds,
-        }
-        exporters.render_docx(text, f"{base_path}.docx", **kwargs)
-        exporters.render_pdf(text, f"{base_path}.pdf", **kwargs)
-        exporters.render_txt(text, f"{base_path}.txt", **kwargs)
-        if words:
-            exporters.render_srt(words, f"{base_path}.srt", **kwargs)
-            transcription.has_timestamps = True
-
-    def process_audio(audio_file):
-        # Lève tôt une 503 explicite si le modèle n'est pas installé
-        get_model()
-        suffix = os.path.splitext(audio_file.filename)[1] or ".audio"
-        temp_path = None
-        try:
-            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                audio_file.save(tmp.name)
-                temp_path = tmp.name
-
-            text, words, duration = prepare_and_transcribe(temp_path, get_model)
-            text = text.strip()
-            if not text:
-                raise ValueError("Aucun texte transcrit (audio vide, silencieux ou inaudible).")
-
-            now = datetime.now()
-            transcription = Transcription(
-                text=text,
-                base_name=(
-                    f"transcription_{now.strftime('%Y%m%d_%H%M%S_%f')}_"
-                ),
-                duration_seconds=round(duration, 2),
-                language=app.config["LANGUAGE"],
-            )
-            # L'identifiant UUID est généré à l'insertion ; on le complète au base_name
-            db.session.add(transcription)
-            db.session.flush()
-            transcription.base_name = f"{transcription.base_name}{transcription.id[:8]}"
-
-            write_exports(transcription, text, words)
-            db.session.commit()
-            logger.info("Transcription %s générée (%d caractères)", transcription.id, len(text))
-            return transcription
-        except Exception:
-            db.session.rollback()
-            raise
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    logger.warning("Impossible de supprimer %s", temp_path)
+        return {fmt: f"{base_path}.{fmt}" for fmt in ("docx", "pdf", "txt", "srt")}
 
     def delete_files(transcription):
         base_path = os.path.join(app.config["TRANSCRIPTIONS_DIR"], transcription.base_name)
@@ -165,8 +83,21 @@ def create_app(config_object=Config):
             if os.path.exists(path):
                 os.unlink(path)
 
+    def handle_transcription_error(exc):
+        if isinstance(exc, (ModelUnavailableError, WhisperUnavailableError)):
+            logger.error("Moteur indisponible : %s", exc)
+            return jsonify({"error": str(exc)}), 503
+        if isinstance(exc, UnknownEngineError):
+            return jsonify({"error": str(exc)}), 400
+        if isinstance(exc, AudioDecodeError):
+            return jsonify({"error": str(exc)}), 422
+        if isinstance(exc, ValueError):
+            return jsonify({"error": str(exc)}), 422
+        logger.exception("Erreur pendant le traitement de l'audio")
+        return jsonify({"error": "Erreur interne lors du traitement de l'audio."}), 500
+
     # ------------------------------------------------------------------
-    # Routes
+    # Santé / moteurs
     # ------------------------------------------------------------------
     @app.route("/health")
     def health():
@@ -178,21 +109,30 @@ def create_app(config_object=Config):
         except Exception:
             logger.exception("La base de données ne répond pas")
             database_ok = False
-        return jsonify(
-            {
-                "status": "ok" if database_ok else "degraded",
-                "database": "ok" if database_ok else "error",
-                "model_path": app.config["MODEL_PATH"],
-                "model_available": os.path.isdir(app.config["MODEL_PATH"]),
-            }
-        ), (200 if database_ok else 503)
+        return (
+            jsonify(
+                {
+                    "status": "ok" if database_ok else "degraded",
+                    "database": "ok" if database_ok else "error",
+                }
+            ),
+            200 if database_ok else 503,
+        )
 
+    @app.route("/api/engines")
+    @require_auth
+    def list_engines():
+        return jsonify(engines_metadata())
+
+    # ------------------------------------------------------------------
+    # Transcription synchrone / asynchrone
+    # ------------------------------------------------------------------
     @app.route("/api/transcribe", methods=["POST"])
-    @limiter.limit(app.config["RATELIMIT_TRANSCRIBE"])
+    @require_auth
+    @limiter.limit(lambda: app.config["RATELIMIT_TRANSCRIBE"])
     def transcribe():
         if "audio" not in request.files:
             return jsonify({"error": "Aucun fichier audio reçu (champ 'audio' attendu)."}), 400
-
         audio_file = request.files["audio"]
         if not audio_file.filename:
             return jsonify({"error": "Aucun fichier audio sélectionné."}), 400
@@ -211,45 +151,111 @@ def create_app(config_object=Config):
                 415,
             )
 
-        try:
-            transcription = process_audio(audio_file)
-        except ModelUnavailableError as exc:
-            logger.error("Modèle indisponible : %s", exc)
-            return jsonify({"error": str(exc)}), 503
-        except AudioDecodeError as exc:
-            return jsonify({"error": str(exc)}), 422
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 422
-        except Exception:
-            logger.exception("Erreur pendant le traitement de l'audio")
-            return jsonify({"error": "Erreur interne lors du traitement de l'audio."}), 500
+        engine_name = (request.form.get("engine") or app.config["DEFAULT_ENGINE"]).lower()
+        language = request.form.get("language") or app.config["DEFAULT_LANGUAGE"]
+        if engine_name not in ("vosk", "whisper"):
+            return jsonify({"error": f"Moteur '{engine_name}' inconnu (vosk|whisper)."}), 400
 
+        # Whisper n'est pas streamable mais gère les fichiers ; vérification rapide
+        try:
+            get_engine(engine_name)
+        except UnknownEngineError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        force_async = request.form.get("async", "").lower() in ("1", "true", "yes")
+        size = request.content_length or 0
+        is_large = size > app.config["ASYNC_THRESHOLD_MB"] * 1024 * 1024
+
+        if force_async or is_large:
+            return start_async_job(audio_file, engine_name, language)
+
+        suffix = os.path.splitext(audio_file.filename)[1] or ".audio"
+        temp_path = None
+        try:
+            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                audio_file.save(tmp.name)
+                temp_path = tmp.name
+            transcription = services.transcribe_file(
+                user_id=current_user().id,
+                audio_path=temp_path,
+                engine=engine_name,
+                language=language,
+            )
+        except Exception as exc:  # noqa: BLE001 - gestion centralisée des codes
+            return handle_transcription_error(exc)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
         return jsonify(transcription.to_dict()), 201
 
+    def start_async_job(audio_file, engine_name, language):
+        job = Job(
+            user_id=current_user().id,
+            status=JOB_PENDING,
+            progress=0,
+            message="En file d'attente...",
+            engine=engine_name,
+            language=language,
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        suffix = os.path.splitext(audio_file.filename)[1] or ".audio"
+        destination = os.path.join(app.config["UPLOADS_DIR"], f"{job.id}{suffix}")
+        audio_file.save(destination)
+        runner.submit(job.id, destination)
+        return jsonify(job.to_dict()), 202
+
+    @app.route("/api/jobs", methods=["GET"])
+    @require_auth
+    def list_jobs():
+        jobs = (
+            db.session.query(Job)
+            .filter_by(user_id=current_user().id)
+            .order_by(Job.created_at.desc())
+            .all()
+        )
+        return jsonify([job.to_dict() for job in jobs])
+
+    @app.route("/api/jobs/<job_id>", methods=["GET"])
+    @require_auth
+    def get_job(job_id):
+        job = (
+            db.session.query(Job)
+            .filter_by(id=job_id, user_id=current_user().id)
+            .first_or_404()
+        )
+        return jsonify(job.to_dict())
+
+    # ------------------------------------------------------------------
+    # CRUD transcriptions
+    # ------------------------------------------------------------------
     @app.route("/api/transcriptions", methods=["GET"])
+    @require_auth
     def list_transcriptions():
         items = (
             db.session.query(Transcription)
+            .filter_by(user_id=current_user().id)
             .order_by(Transcription.created_at.desc())
             .all()
         )
         return jsonify([item.to_dict() for item in items])
 
     @app.route("/api/transcriptions/<transcription_id>", methods=["GET"])
+    @require_auth
     def get_transcription(transcription_id):
-        transcription = db.get_or_404(Transcription, transcription_id)
-        return jsonify(transcription.to_dict())
+        return jsonify(owned_transcription_or_404(transcription_id).to_dict())
 
     @app.route("/api/transcriptions/<transcription_id>", methods=["PATCH"])
+    @require_auth
     def update_transcription(transcription_id):
-        transcription = db.get_or_404(Transcription, transcription_id)
+        transcription = owned_transcription_or_404(transcription_id)
         payload = request.get_json(silent=True) or {}
         new_text = payload.get("text")
         if not isinstance(new_text, str) or not new_text.strip():
             return jsonify({"error": "Le champ 'text' doit être une chaîne non vide."}), 400
 
         transcription.text = new_text.strip()
-        # Les exports DOCX / PDF / TXT sont régénérés ; le SRT d'origine est conservé.
         base_path = os.path.join(app.config["TRANSCRIPTIONS_DIR"], transcription.base_name)
         kwargs = {
             "language": transcription.language,
@@ -263,25 +269,34 @@ def create_app(config_object=Config):
         return jsonify(transcription.to_dict())
 
     @app.route("/api/transcriptions/<transcription_id>", methods=["DELETE"])
+    @require_auth
     def delete_transcription(transcription_id):
-        transcription = db.get_or_404(Transcription, transcription_id)
+        transcription = owned_transcription_or_404(transcription_id)
         delete_files(transcription)
         db.session.delete(transcription)
         db.session.commit()
         return "", 204
 
     @app.route("/api/transcriptions", methods=["DELETE"])
+    @require_auth
     def clear_transcriptions():
-        for transcription in db.session.query(Transcription).all():
+        items = (
+            db.session.query(Transcription)
+            .filter_by(user_id=current_user().id)
+            .all()
+        )
+        for transcription in items:
             delete_files(transcription)
-        db.session.query(Transcription).delete()
+        for transcription in items:
+            db.session.delete(transcription)
         db.session.commit()
         return "", 204
 
     @app.route("/api/transcriptions/<transcription_id>/export/<fmt>")
+    @require_auth
     def export_transcription(transcription_id, fmt):
-        transcription = db.get_or_404(Transcription, transcription_id)
-        if fmt not in EXPORT_FORMATS:
+        transcription = owned_transcription_or_404(transcription_id)
+        if fmt not in ("docx", "pdf", "txt", "srt"):
             return jsonify({"error": f"Format d'export inconnu : {fmt}"}), 404
         if fmt == "srt" and not transcription.has_timestamps:
             return jsonify({"error": "Export SRT indisponible pour cette transcription."}), 404
@@ -319,13 +334,14 @@ def create_app(config_object=Config):
 
     @app.errorhandler(404)
     def not_found(_error):
-        if request.path.startswith("/api/"):
-            return jsonify({"error": "Ressource introuvable."}), 404
-        return jsonify({"error": "Ressource introuvable.", "service": "Chatbot Vocal"}), 404
+        return jsonify({"error": "Ressource introuvable."}), 404
 
     @app.errorhandler(429)
     def rate_limited(error):
-        return jsonify({"error": "Trop de requêtes, réessayez plus tard.", "details": str(error.description)}), 429
+        return (
+            jsonify({"error": "Trop de requêtes, réessayez plus tard.", "details": str(error.description)}),
+            429,
+        )
 
     @app.errorhandler(500)
     def internal_error(_error):
@@ -339,12 +355,13 @@ def create_app(config_object=Config):
                 "service": "Chatbot Vocal",
                 "status": "actif",
                 "endpoints": [
-                    "GET /health",
+                    "POST /api/auth/register",
+                    "POST /api/auth/login",
+                    "GET /api/engines",
                     "POST /api/transcribe",
                     "GET /api/transcriptions",
-                    "GET /api/transcriptions/<id>",
-                    "PATCH /api/transcriptions/<id>",
-                    "GET /api/transcriptions/<id>/export/<fmt>",
+                    "GET /api/jobs/<id>",
+                    "WS /ws/transcribe",
                 ],
             }
         )

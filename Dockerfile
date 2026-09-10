@@ -24,5 +24,9 @@ ENV DATA_DIR=/app/data \
 VOLUME ["/app/data"]
 EXPOSE 5001
 
-# --timeout élevé : la transcription de gros fichiers peut prendre du temps
-CMD ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:5001", "--timeout", "600", "chatbot:app"]
+# Worker gevent-websocket requis pour les WebSockets temps réel.
+# Un seul worker gevent suffit (concurrence par greenlets) ; monter plusieurs
+# processus nécessite un stockage partagé (Redis) pour le rate limiting.
+CMD ["gunicorn", \
+     "-k", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker", \
+     "-w", "1", "--bind", "0.0.0.0:5001", "--timeout", "600", "chatbot:app"]

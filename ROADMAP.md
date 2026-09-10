@@ -223,12 +223,13 @@ Il s'agit aujourd'hui davantage d'un **transcripteur vocal** que d'un « chatbot
 12. ✅ Docker + docker-compose (backend ffmpeg/gunicorn, frontend nginx relayant l'API) et CI GitHub Actions (pytest + Jest + build)
     - Restent pour plus tard : lint/format automatisés (ruff/Prettier) dans la CI
 
-### Sprint 3 — Fonctionnalités avancées (2 à 4 semaines) 🟡
-13. Transcription streaming par WebSocket (F1), traitement asynchrone des gros fichiers (F3)
-14. Authentification et transcriptions privées par utilisateur (F25–F27)
-15. Multilingue et choix du moteur (Vosk large / faster-whisper) (F5, F6)
-16. Post-traitements : ponctuation, correction, mots horodatés (F4, F8)
-17. PWA + i18n + accessibilité + design system (F28–F32)
+### Sprint 3 — Fonctionnalités avancées ✅ LIVRÉ (2026-09-10) 🟡
+13. ✅ Transcription temps réel par **WebSocket** (flux PCM 16 kHz, partiels affichés en direct, sauvegarde à l'arrêt) et **tâches asynchrones** pour les gros fichiers avec progression (`/api/jobs`, exécuteur en threads remplaçable par Celery/Redis) (F1, F3)
+14. ✅ **Authentification JWT** (inscription/connexion, hash werkzeug) et **transcriptions privées** par utilisateur, isolation complète des ressources (F25–F27 partiel : OAuth et quotas restent à faire)
+15. ✅ **Multilingue et multi-moteurs** : abstraction `engines/`, Vosk avec modèles par langue (`VOSK_MODELS`), moteur **faster-whisper** optionnel (`requirements-whisper.txt`), endpoint `/api/engines` reflétant la disponibilité (F5, F6)
+16. 🔶 Mots horodatés → **SRT** déjà livré au sprint 2 ; restent la ponctuation/correction automatiques (F8) et les lexiques métier
+17. ✅ **PWA** (service worker, manifest, mode hors-ligne), **i18n FR/EN** (i18next), accessibilité (skip-link, ARIA live, focus visibles, rôles tab) ; un vrai design system de composants reste souhaitable (F28–F32 partiel)
+    - Backend découpé en modules + **35 tests pytest** ; worker **gevent-websocket** pour gunicorn/Docker ; proxy WebSocket dans nginx
 
 ### Sprint 4 — Différenciation (« chatbot » assumé) 🟢
 18. Résumés, actions à faire, mots-clés, conversation avec un LLM sur la transcription (F19, F20)

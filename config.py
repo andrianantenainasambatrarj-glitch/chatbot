@@ -1,5 +1,6 @@
 """Configuration de l'application, lue depuis les variables d'environnement."""
 
+import json
 import os
 
 
@@ -25,6 +26,9 @@ class Config:
         "wav", "mp3", "m4a", "ogg", "oga", "webm", "mp4",
         "flac", "aac", "opus", "wma",
     }
+    # Au-delà de ce seuil, la transcription passe en tâche asynchrone
+    ASYNC_THRESHOLD_MB = float(os.environ.get("ASYNC_THRESHOLD_MB", "5"))
+    JOB_WORKERS = int(os.environ.get("JOB_WORKERS", "2"))
 
     # CORS
     CORS_ORIGINS = [
@@ -39,7 +43,31 @@ class Config:
     RATELIMIT_ENABLED = _bool("RATELIMIT_ENABLED", default=True)
     RATELIMIT_STORAGE_URI = os.environ.get("RATELIMIT_STORAGE_URI", "memory://")
     RATELIMIT_TRANSCRIBE = os.environ.get("RATELIMIT_TRANSCRIBE", "10/minute")
+    RATELIMIT_AUTH = os.environ.get("RATELIMIT_AUTH", "20/hour")
     RATELIMIT_DEFAULT = os.environ.get("RATELIMIT_DEFAULT", "300/hour")
 
-    # Reconnaissance
-    LANGUAGE = os.environ.get("LANGUAGE", "fr")
+    # Authentification
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", os.environ.get("SECRET_KEY", "change-me-dev"))
+    JWT_EXPIRES_HOURS = int(os.environ.get("JWT_EXPIRES_HOURS", "168"))  # 7 jours
+
+    # Moteurs de reconnaissance
+    DEFAULT_ENGINE = os.environ.get("DEFAULT_ENGINE", "vosk")
+    DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "fr")
+    # Mapping langue -> chemin du modèle Vosk, surchargeable par variable d'env (JSON)
+    VOSK_MODELS = json.loads(
+        os.environ.get(
+            "VOSK_MODELS",
+            json.dumps({"fr": os.environ.get("MODEL_PATH", "models/vosk-model-small-fr-0.22")}),
+        )
+    )
+    WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")
+    WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")
+    WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+    # Langues reconnues par Whisper (sous-ensemble courant)
+    WHISPER_LANGUAGES = [
+        "fr", "en", "es", "de", "it", "pt", "nl", "pl", "ru",
+        "zh", "ja", "ar", "mg", "tr", "sv", "fi", "da", "no",
+    ]
+
+    # Langue des métadonnées d'export (conservée pour compatibilité)
+    LANGUAGE = DEFAULT_LANGUAGE
