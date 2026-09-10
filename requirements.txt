@@ -1,0 +1,4 @@
+flask
+SpeechRecognition
+python-docx
+flask-cors 

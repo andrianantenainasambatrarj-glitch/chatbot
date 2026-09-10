@@ -1,0 +1,252 @@
+/* Importation de polices modernes (optionnel, via CDN si disponible) */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;500;700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.app {
+  font-family: 'Poppins', sans-serif;
+  min-height: 100vh;
+  padding: 20px;
+  transition: all 0.3s ease;
+}
+
+.dark-mode {
+  background: linear-gradient(135deg, #1e1e2f, #2d2d44);
+  color: #e0e0e0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.title {
+  font-size: 2.5rem;
+  color: #00aaff;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.theme-toggle {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: #00aaff;
+  transition: color 0.3s ease;
+}
+
+.theme-toggle:hover {
+  color: #00ddff;
+}
+
+.main-content {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.subtitle {
+  font-size: 1.2rem;
+  color: #666;
+  margin-bottom: 15px;
+}
+
+.dark-mode .subtitle {
+  color: #a0a0c0;
+}
+
+.instruction-card {
+  background: #f9f9f9;
+  padding: 15px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.dark-mode .instruction-card {
+  background: #2d2d44;
+  color: #e0e0e0;
+}
+
+.instruction-card ul {
+  list-style: none;
+}
+
+.instruction-card li {
+  margin: 5px 0;
+  padding-left: 15px;
+  position: relative;
+}
+
+.instruction-card li::before {
+  content: '•';
+  color: #00aaff;
+  position: absolute;
+  left: 0;
+}
+
+.record-button {
+  padding: 12px 25px;
+  font-size: 1.1rem;
+  border: none;
+  border-radius: 25px;
+  cursor: pointer;
+  background: #00aaff;
+  color: white;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.record-button:hover:not(:disabled) {
+  transform: scale(1.05);
+  background: #00ddff;
+}
+
+.record-button.stop {
+  background: #ff4444;
+}
+
+.record-button.stop:hover:not(:disabled) {
+  background: #ff6666;
+}
+
+.record-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.loader {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #00aaff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 20px auto;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.result {
+  margin: 15px 0;
+  font-size: 1rem;
+  color: #333;
+}
+
+.dark-mode .result {
+  color: #e0e0e0;
+}
+
+.transcription-card {
+  background: #f9f9f9;
+  padding: 15px;
+  border-radius: 10px;
+  margin: 15px 0;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.dark-mode .transcription-card {
+  background: #2d2d44;
+  color: #e0e0e0;
+}
+
+.download-button {
+  display: inline-block;
+  padding: 10px 20px;
+  background: #00aaff;
+  color: white;
+  text-decoration: none;
+  border-radius: 25px;
+  margin: 10px 0;
+  transition: background 0.3s ease;
+}
+
+.download-button:hover {
+  background: #00ddff;
+}
+
+.clear-history {
+  padding: 8px 15px;
+  background: #ff4444;
+  color: white;
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 0.3s ease;
+}
+
+.clear-history:hover:not(:disabled) {
+  background: #ff6666;
+}
+
+.clear-history:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.history-section {
+  margin-top: 30px;
+}
+
+.history-section h2 {
+  color: #00aaff;
+  margin-bottom: 15px;
+}
+
+.dark-mode .history-section h2 {
+  color: #00ddff;
+}
+
+.history-grid {
+  display: grid;
+  gap: 15px;
+}
+
+.history-card {
+  background: #f9f9f9;
+  padding: 10px;
+  border-radius: 10px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s ease;
+}
+
+.dark-mode .history-card {
+  background: #2d2d44;
+  color: #e0e0e0;
+}
+
+.history-card:hover {
+  transform: translateY(-5px);
+}
+
+.download-link {
+  color: #00aaff;
+  text-decoration: underline;
+  margin-left: 10px;
+  transition: color 0.3s ease;
+}
+
+.dark-mode .download-link {
+  color: #90ee90;
+}
+
+.download-link:hover {
+  color: #00ddff;
+}
+
+.dark-mode .download-link:hover {
+  color: #aaffaa;
+}
+
+@media (min-width: 600px) {
+  .history-grid {
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  }
+}

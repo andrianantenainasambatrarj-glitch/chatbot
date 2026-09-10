@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+
+# Environnements et secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.key
+
+# Dépendances et outils locaux
+site-packages/
+*.exe
+.vscode/
+
+# Données NLTK téléchargées
+nltk_data/*
+!nltk_data/setup_nltk.py
+
+# Modèles lourds
+models/
+
+# Fichiers générés par l'application
+static/*.docx
+static/*.wav
+static/*.webm
+static/*_history.json
+
+# Logs et fichiers temporaires
+*.log
+*.tmp
+*.temp
+
+# Frontend
+frontend/node_modules/
+frontend/build/
+frontend/coverage/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Système
+.DS_Store
+Thumbs.db
