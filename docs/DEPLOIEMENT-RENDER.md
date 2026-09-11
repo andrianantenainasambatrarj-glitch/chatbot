@@ -20,7 +20,7 @@ pas de votre machine :
 - **Transcription Vosk** (français + anglais) : ✅
 - **Mode en direct** (WebSocket `/ws/transcribe`) : ✅
 - **Commandes vocales** (WebSocket `/ws/commands`) : ✅
-- **Whisper** (modèle `base`, multilingue, plus précis) : ✅
+- **Whisper** (modèle `tiny` préchargé, multilingue) : ✅ ; les modèles `base`/`small` s'obtiennent par argument de build Docker sur une instance d'au moins 1 Go de RAM
 - Exports Word / PDF / TXT / SRT, analyse, chat, partage, e-mail : ✅
 - Analyse LLM et envoi SMTP : optionnels (variables d'environnement)
 
@@ -49,7 +49,7 @@ supplémentaire.
 
 La première construction dure **10 à 20 minutes** : elle installe ffmpeg,
 télécharge les modèles Vosk (fr + en, ~80 Mo) et pré-charge le modèle
-Whisper `base` (~150 Mo). Les déploiements suivants sont plus rapides
+Whisper `tiny` (~75 Mo). Les déploiements suivants sont plus rapides
 (les couches Docker sont en cache).
 
 ### 3. Vérifier
@@ -71,16 +71,14 @@ réglages des deux services sur Render).
 
 ### Whisper : précision vs mémoire vive
 
-L'image embarque le modèle **`base`** qui fonctionne sur le plan Starter
-(512 Mo de RAM, en partage avec le reste de l'API). Si vous constatez des
-redémarrages du conteneur pendant une transcription Whisper
-(`502`/`503` dans les journaux), deux options :
+L'image embarque par défaut le modèle **`tiny`**, sûr même en 512 Mo de
+RAM. Pour gagner en précision avec **`base`** (~1 Go de RAM nécessaire) ou
+**`small`** (~2 Go) :
 
-1. Passer au plan **Standard** (2 Go de RAM) et utiliser `small` :
-   - variable `WHISPER_MODEL_SIZE=small` dans les réglages du backend,
-   - relancer une construction complète (« Clear build cache & deploy »).
-2. Passer à `tiny` (plus léger, un peu moins précis) : même procédure avec
-   `WHISPER_MODEL_SIZE=tiny`.
+1. passez sur un plan **Standard** (2 Go de RAM) ;
+2. reconstruisez l'image avec l'argument de build `WHISPER_MODEL_SIZE=base`
+   (ou `small`) et fixez la variable d'environnement du même nom ;
+3. relancez « Clear build cache & deploy ».
 
 Le modèle utilisé doit correspondre à celui pré-téléchargé : toute
 modification de `WHISPER_MODEL_SIZE` nécessite une reconstruction de
@@ -101,8 +99,8 @@ Vous pouvez passer le backend en plan **Free** et supprimer le bloc
 - le serveur s'endort après 15 min d'inactivité (premier chargement
   suivant lent, ~30-60 s de réveil) ;
 - les comptes et transcriptions sont perdus à chaque redéploiement ;
-- Whisper `base` en 512 Mo partagés peut manquer de mémoire (Vosk reste
-  parfaitement utilisable).
+- Whisper `tiny` tient en 512 Mo ; les modèles plus gros redémarrent le conteneur (Vosk reste
+  parfaitement utilisable dans tous les cas).
 
 ### Analyse par LLM (résumés de meilleure qualité)
 

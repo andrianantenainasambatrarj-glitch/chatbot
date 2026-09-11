@@ -328,10 +328,12 @@ export default function App() {
   useEffect(() => {
     if (!job || job.status === 'done' || job.status === 'error') return undefined;
     let cancelled = false;
+    let failures = 0;
     const poll = async () => {
       try {
         const fresh = await getJob(job.id);
         if (cancelled) return;
+        failures = 0;
         setJob(fresh);
         if (fresh.status === 'done' && fresh.transcription) {
           setLastResult(fresh.transcription);
@@ -342,7 +344,18 @@ export default function App() {
           loadHistory();
         }
       } catch (err) {
-        if (!cancelled) setJob((prev) => ({ ...prev, status: 'error', error: err.message }));
+        if (cancelled) return;
+        // Le serveur gratuit peut redémarrer (mise en veille, dépassement de
+        // mémoire) pendant le traitement : on laisse ~90 s au lieu d'échouer
+        // à la première requête ratée.
+        failures += 1;
+        if (failures > 100) {
+          setJob((prev) => ({
+            ...prev,
+            status: 'error',
+            error: `${err.message} ${t('jobLost')}`,
+          }));
+        }
       }
     };
     const id = setInterval(poll, 900);

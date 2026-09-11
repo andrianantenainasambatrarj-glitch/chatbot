@@ -35,12 +35,15 @@ services:
         value: vosk
       - key: DEFAULT_LANGUAGE
         value: fr
-      # Modèle préchargé dans l'image. Sur le plan gratuit (512 Mo de RAM),
-      # si Whisper fait redémarrer le serveur, passez à "tiny" (le modèle
-      # est alors téléchargé au premier usage) : Vosk reste pleinement
-      # fonctionnel dans tous les cas.
+      # Un seul traitement à la fois pour limiter la mémoire (plan Free :
+      # 512 Mo de RAM, un dépassement tue le conteneur).
+      - key: JOB_WORKERS
+        value: "1"
+      # Whisper "tiny" préchargé dans l'image : sûr en 512 Mo. Pour "base"
+      # ou "small", passez sur une instance payante avec 1-2 Go de RAM et
+      # reconstruisez l'image avec l'argument WHISPER_MODEL_SIZE correspondant.
       - key: WHISPER_MODEL_SIZE
-        value: base
+        value: tiny
       - key: WHISPER_DEVICE
         value: cpu
       - key: WHISPER_COMPUTE_TYPE

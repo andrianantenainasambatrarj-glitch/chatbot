@@ -12,11 +12,12 @@ WORKDIR /app
 # Arguments de construction :
 #  DOWNLOAD_MODEL=1   télécharge le petit modèle Vosk français (~40 Mo)
 #  INSTALL_WHISPER=1  installe faster-whisper et pré-télécharge le modèle
-#  WHISPER_MODEL_SIZE base|small|medium (base : ~150 Mo, équilibre RAM/précision)
+#  WHISPER_MODEL_SIZE tiny|base|small (tiny : ~75 Mo, sûr en 512 Mo de RAM ;
+#  base : plus précis mais ~300-400 Mo en crête, réserver 1 Go de RAM)
 ARG DOWNLOAD_MODEL=1
 ARG DOWNLOAD_EN_MODEL=1
 ARG INSTALL_WHISPER=1
-ARG WHISPER_MODEL_SIZE=base
+ARG WHISPER_MODEL_SIZE=tiny
 
 COPY requirements.txt requirements-prod.txt ./
 RUN pip install --no-cache-dir -r requirements-prod.txt

@@ -15,10 +15,10 @@ Render :
 - Le backend **s'endort après 15 min sans utilisation** : le premier
   accès suivant met 30 à 60 s à réveiller le serveur.
 - 512 Mo de RAM : Vosk et le mode direct fonctionnent très bien ; le
-  modèle Whisper `base` passe en règle général — si une transcription
-  Whisper fait redémarrer le service, mettez la variable
-  `WHISPER_MODEL_SIZE=tiny` dans les réglages Render (le modèle, plus
-  léger, est téléchargé au premier usage).
+  modèle Whisper **`tiny` préchargé dans l'image** est utilisé par
+  défaut pour tenir en mémoire. Pour les modèles plus précis (`base`,
+  `small`), il faut une instance payante avec au moins 1 Go de RAM et
+  reconstruire l'image avec l'argument Docker `WHISPER_MODEL_SIZE`.
 - Les fichiers audio et documents ne sont pas conservés après un
   redémarrage du conteneur : les exports Word/PDF/TXT sont
   **régénérés automatiquement à la demande** depuis le texte en base ;

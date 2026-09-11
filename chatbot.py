@@ -85,6 +85,9 @@ def create_app(config_object=Config):
 
     runner = JobRunner(app, max_workers=app.config["JOB_WORKERS"])
     app.extensions["job_runner"] = runner
+    # Les tâches en cours au moment d'un arrêt précédent ne peuvent pas
+    # reprendre : on les signale en erreur plutôt que de les laisser bloquées.
+    runner.reset_stale_jobs()
 
     # ------------------------------------------------------------------
     def owned_transcription_or_404(transcription_id):
