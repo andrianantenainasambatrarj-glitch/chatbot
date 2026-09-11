@@ -18,6 +18,8 @@ class Config:
         "DATABASE_URL", "sqlite:///" + os.path.abspath(os.path.join(DATA_DIR, "chatbot.db"))
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # Vérifie les connexions avant usage (Néon met sa base gratuite en veille)
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True, "pool_recycle": 300}
 
     # Uploads
     MAX_CONTENT_LENGTH_MB = int(os.environ.get("MAX_CONTENT_LENGTH_MB", "100"))

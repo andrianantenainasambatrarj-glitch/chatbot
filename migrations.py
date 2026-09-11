@@ -34,6 +34,12 @@ EXPECTED_COLUMNS = {
 
 
 def ensure_sqlite_schema(db):
+    # Les ALTER ci-dessous sont écrits en syntaxe SQLite. Sur une base
+    # PostgreSQL/MySQL (ex : Neon en hébergement gratuit), db.create_all()
+    # crée directement toutes les colonnes à jour : aucune migration n'est
+    # nécessaire sur une base neuve.
+    if db.engine.dialect.name != "sqlite":
+        return
     inspector = inspect(db.engine)
     existing_tables = set(inspector.get_table_names())
     with db.engine.begin() as connection:

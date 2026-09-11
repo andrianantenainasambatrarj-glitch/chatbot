@@ -1,5 +1,10 @@
 # Déploiement sur Render
 
+> **Vous cherchez la version 100 % gratuite ?** Voir
+> [`DEPLOIEMENT-GRATUIT.md`](./DEPLOIEMENT-GRATUIT.md) (plan Free Render +
+> base PostgreSQL Neon gratuite). Le guide ci-dessous correspond à la version
+> payante avec disque persistant (serveur qui ne dort jamais).
+
 Ce guide déploie l'application sur [Render](https://render.com) en deux services :
 
 | Service | Type | URL prévue | Coût |

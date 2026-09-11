@@ -111,8 +111,26 @@ def create_app(config_object=Config):
         path = os.path.join(
             app.config["TRANSCRIPTIONS_DIR"], f"{transcription.base_name}.{fmt}"
         )
+        # Sur hébergement gratuit à disque éphémère (ex : plan Free Render),
+        # les fichiers générés peuvent avoir disparu après un redémarrage :
+        # on les régénère depuis le texte stocké en base.
         if not os.path.exists(path):
-            return jsonify({"error": "Fichier d'export manquant sur le serveur."}), 410
+            if fmt == "srt":
+                return jsonify({"error": "Fichier d'export manquant sur le serveur."}), 410
+            kwargs = {
+                "language": transcription.language,
+                "duration_seconds": transcription.duration_seconds,
+            }
+            try:
+                if fmt == "docx":
+                    exporters.render_docx(transcription.text, path, **kwargs)
+                elif fmt == "pdf":
+                    exporters.render_pdf(transcription.text, path, **kwargs)
+                elif fmt == "txt":
+                    exporters.render_txt(transcription.text, path, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Régénération de l'export %s impossible", fmt)
+                return jsonify({"error": f"Impossible de générer l'export : {exc}"}), 500
         return send_file(
             path,
             as_attachment=True,

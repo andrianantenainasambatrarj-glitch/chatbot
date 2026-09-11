@@ -7,3 +7,5 @@ gunicorn==23.0.0
 # >= 24.11.1 pour disposer de roues précompilées avec Python 3.13
 gevent>=24.11.1
 gevent-websocket==0.10.1
+# Base PostgreSQL externe gratuite (Neon, Supabase…) via DATABASE_URL
+psycopg2-binary==2.9.10

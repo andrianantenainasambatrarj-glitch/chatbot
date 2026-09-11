@@ -1,11 +1,15 @@
-# Blueprint Render : https://render.com/docs/blueprint-spec
+# Blueprint Render — version 100% GRATUITE : https://render.com/docs/blueprint-spec
 #
 # Crée deux services :
-#   - chatbot-vocal-backend  : API Flask en Docker (Vosk + Whisper, WebSockets)
-#   - chatbot-vocal-frontend : site statique React buildé, en HTTPS gratuit
+#   - chatbot-vocal-backend  : API Flask en Docker (plan Free, Vosk + Whisper)
+#   - chatbot-vocal-frontend : site statique React (gratuit, HTTPS compris)
 #
-# Au premier déploiement, Render demande les valeurs "sync: false"
-# (ADMIN_EMAILS). Le secret SECRET_KEY est généré automatiquement.
+# Le plan Free n'a pas de disque persistant : la base est donc hébergée
+# gratuitement sur Neon (PostgreSQL). Voir docs/DEPLOIEMENT-GRATUIT.md.
+#
+# Contreparties du gratuit : le serveur s'endort après 15 min d'inactivité
+# (premier accès suivant ~30-60 s de réveil) ; les fichiers d'export Word/
+# PDF/TXT sont régénérés à la demande (déjà géré par le backend).
 
 services:
   # -----------------------------------------------------------------
@@ -15,14 +19,10 @@ services:
     name: chatbot-vocal-backend
     runtime: docker
     branch: arena/01a08aa8-chatbot
-    plan: starter
+    plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
-    disk:
-      name: data
-      mountPath: /app/data
-      sizeGB: 1
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
@@ -34,19 +34,26 @@ services:
         value: vosk
       - key: DEFAULT_LANGUAGE
         value: fr
-      # Doit correspondre au modèle pré-téléchargé dans l'image (base).
-      # Pour "small" ou "medium", reconstruire avec cette variable modifiée
-      # et passer sur un plan avec plus de RAM (2 Go recommandé).
+      # Modèle préchargé dans l'image. Sur le plan gratuit (512 Mo de RAM),
+      # si Whisper fait redémarrer le serveur, passez à "tiny" (le modèle
+      # est alors téléchargé au premier usage) : Vosk reste pleinement
+      # fonctionnel dans tous les cas.
       - key: WHISPER_MODEL_SIZE
         value: base
       - key: WHISPER_DEVICE
         value: cpu
       - key: WHISPER_COMPUTE_TYPE
         value: int8
+      # Base PostgreSQL gratuite Neon : collez la chaîne de connexion
+      # fournie par Neon (elle commence par postgresql://...).
+      # Indispensable pour conserver comptes et transcriptions sur le
+      # plan gratuit à disque éphémère.
+      - key: DATABASE_URL
+        sync: false
       - key: CORS_ORIGINS
         value: https://chatbot-vocal-frontend.onrender.com
-      # Renseignez votre adresse e-mail dans le dashboard Render
-      # pour obtenir le rôle administrateur.
+      # Votre adresse e-mail pour obtenir le rôle administrateur dès
+      # l'inscription (peut rester vide).
       - key: ADMIN_EMAILS
         sync: false
       # Optionnel : analyse LLM (OpenAI ou Ollama exposé publiquement)
@@ -76,7 +83,7 @@ services:
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: ./build
-    # Les variables REACT_APP_* sont gravées dans le build : l'URL doit être
+    # La variable REACT_APP_* est gravée dans le build : l'URL doit être
     # celle du backend ci-dessus. Renommez les deux services ensemble sinon.
     envVars:
       - key: REACT_APP_API_URL
