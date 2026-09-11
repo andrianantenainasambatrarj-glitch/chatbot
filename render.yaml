@@ -1,0 +1,89 @@
+# Blueprint Render : https://render.com/docs/blueprint-spec
+#
+# Crée deux services :
+#   - chatbot-vocal-backend  : API Flask en Docker (Vosk + Whisper, WebSockets)
+#   - chatbot-vocal-frontend : site statique React buildé, en HTTPS gratuit
+#
+# Au premier déploiement, Render demande les valeurs "sync: false"
+# (ADMIN_EMAILS). Le secret SECRET_KEY est généré automatiquement.
+
+services:
+  # -----------------------------------------------------------------
+  # API (temps réel, transcription)
+  # -----------------------------------------------------------------
+  - type: web
+    name: chatbot-vocal-backend
+    runtime: docker
+    branch: arena/01a08aa8-chatbot
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATA_DIR
+        value: /app/data
+      - key: DEFAULT_ENGINE
+        value: vosk
+      - key: DEFAULT_LANGUAGE
+        value: fr
+      # Doit correspondre au modèle pré-téléchargé dans l'image (base).
+      # Pour "small" ou "medium", reconstruire avec cette variable modifiée
+      # et passer sur un plan avec plus de RAM (2 Go recommandé).
+      - key: WHISPER_MODEL_SIZE
+        value: base
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: WHISPER_COMPUTE_TYPE
+        value: int8
+      - key: CORS_ORIGINS
+        value: https://chatbot-vocal-frontend.onrender.com
+      # Renseignez votre adresse e-mail dans le dashboard Render
+      # pour obtenir le rôle administrateur.
+      - key: ADMIN_EMAILS
+        sync: false
+      # Optionnel : analyse LLM (OpenAI ou Ollama exposé publiquement)
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      # Optionnel : envoi d'e-mails SMTP
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+
+  # -----------------------------------------------------------------
+  # Frontend (site statique, gratuit)
+  # -----------------------------------------------------------------
+  - type: web
+    name: chatbot-vocal-frontend
+    runtime: static
+    branch: arena/01a08aa8-chatbot
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./build
+    # Les variables REACT_APP_* sont gravées dans le build : l'URL doit être
+    # celle du backend ci-dessus. Renommez les deux services ensemble sinon.
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://chatbot-vocal-backend.onrender.com
+    # Routage SPA : toute URL inconnue renvoie index.html
+    # (nécessaire pour les liens de partage /shared/<token>)
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -5,6 +5,10 @@ services:
       args:
         # Mettez 0 pour utiliser un modèle monté dans ./models
         DOWNLOAD_MODEL: "1"
+        DOWNLOAD_EN_MODEL: "1"
+        # Passez à 1 pour inclure faster-whisper dans l'image locale (~2 Go)
+        INSTALL_WHISPER: "0"
+        WHISPER_MODEL_SIZE: "base"
     container_name: chatbot-vocal-backend
     environment:
       DATA_DIR: /app/data
