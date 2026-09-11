@@ -1,10 +1,11 @@
 # Blueprint Render — version 100% GRATUITE : https://render.com/docs/blueprint-spec
 #
-# Crée deux services :
-#   - chatbot-vocal-backend  : API Flask en Docker (plan Free, Vosk + Whisper)
-#   - chatbot-vocal-frontend : site statique React (gratuit, HTTPS compris)
+# Crée deux services aux noms volontairement uniques (pour ne pas entrer
+# en collision avec d'éventuels services existants du compte) :
+#   - chatbot-vocal-api : API Flask en Docker (plan Free, Vosk + Whisper)
+#   - chatbot-vocal-app : site statique React (gratuit, HTTPS compris)
 #
-# Le plan Free n'a pas de disque persistant : la base est donc hébergée
+# Le plan Free n'a pas de disque persistant : la base est hébergée
 # gratuitement sur Neon (PostgreSQL). Voir docs/DEPLOIEMENT-GRATUIT.md.
 #
 # Contreparties du gratuit : le serveur s'endort après 15 min d'inactivité
@@ -16,7 +17,7 @@ services:
   # API (temps réel, transcription)
   # -----------------------------------------------------------------
   - type: web
-    name: chatbot-vocal-backend
+    name: chatbot-vocal-api
     runtime: docker
     branch: arena/01a08aa8-chatbot
     plan: free
@@ -51,7 +52,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: CORS_ORIGINS
-        value: https://chatbot-vocal-frontend.onrender.com
+        value: https://chatbot-vocal-app.onrender.com
       # Votre adresse e-mail pour obtenir le rôle administrateur dès
       # l'inscription (peut rester vide).
       - key: ADMIN_EMAILS
@@ -77,17 +78,17 @@ services:
   # Frontend (site statique, gratuit)
   # -----------------------------------------------------------------
   - type: web
-    name: chatbot-vocal-frontend
+    name: chatbot-vocal-app
     runtime: static
     branch: arena/01a08aa8-chatbot
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: ./build
     # La variable REACT_APP_* est gravée dans le build : l'URL doit être
-    # celle du backend ci-dessus. Renommez les deux services ensemble sinon.
+    # celle de l'API ci-dessus.
     envVars:
       - key: REACT_APP_API_URL
-        value: https://chatbot-vocal-backend.onrender.com
+        value: https://chatbot-vocal-api.onrender.com
     # Routage SPA : toute URL inconnue renvoie index.html
     # (nécessaire pour les liens de partage /shared/<token>)
     routes:

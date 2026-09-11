@@ -65,14 +65,14 @@ Les tables sont créées automatiquement au premier démarrage du backend
 4. Cliquez **Apply**. La première construction dure 10 à 20 min
    (téléchargement de ffmpeg, des modèles Vosk fr/en et de Whisper).
 5. À la fin, deux URL apparaissent :
-   - `https://chatbot-vocal-frontend.onrender.com` (le site)
-   - `https://chatbot-vocal-backend.onrender.com` (l'API)
+   - `https://chatbot-vocal-app.onrender.com` (le site)
+   - `https://chatbot-vocal-api.onrender.com` (l'API)
 
 Vérification de l'API (le tout premier appel peut prendre ~1 min, le
 temps du réveil) :
 
 ```
-https://chatbot-vocal-backend.onrender.com/health
+https://chatbot-vocal-api.onrender.com/health
 ```
 
 → doit répondre `{"status": "ok", "database": "ok", ...}`. Si

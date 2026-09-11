@@ -9,8 +9,8 @@ Ce guide déploie l'application sur [Render](https://render.com) en deux service
 
 | Service | Type | URL prévue | Coût |
 |---|---|---|---|
-| `chatbot-vocal-backend` | API Docker (Vosk + Whisper, WebSockets) | `https://chatbot-vocal-backend.onrender.com` | plan **Starter** (~7 $/mois) + disque 1 Go |
-| `chatbot-vocal-frontend` | Site statique React | `https://chatbot-vocal-frontend.onrender.com` | **gratuit**, HTTPS compris |
+| `chatbot-vocal-backend` | API Docker (Vosk + Whisper, WebSockets) | `https://chatbot-vocal-api.onrender.com` | plan **Starter** (~7 $/mois) + disque 1 Go |
+| `chatbot-vocal-frontend` | Site statique React | `https://chatbot-vocal-app.onrender.com` | **gratuit**, HTTPS compris |
 
 ## Quelles fonctionnalités sont disponibles ?
 
@@ -54,9 +54,9 @@ Whisper `base` (~150 Mo). Les déploiements suivants sont plus rapides
 
 ### 3. Vérifier
 
-- Backend : ouvrez `https://chatbot-vocal-backend.onrender.com/health`,
+- Backend : ouvrez `https://chatbot-vocal-api.onrender.com/health`,
   vous devez obtenir `{"status": "ok", ...}`.
-- Frontend : ouvrez `https://chatbot-vocal-frontend.onrender.com`,
+- Frontend : ouvrez `https://chatbot-vocal-app.onrender.com`,
   inscrivez-vous, puis testez l'enregistrement, le **mode en direct** et
   les **commandes vocales** (autorisez le micro dans le navigateur).
 
