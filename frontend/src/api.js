@@ -31,12 +31,32 @@ export async function apiFetch(path, options = {}) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const url = `${API_BASE}${path}`;
+  let response;
+  try {
+    response = await fetch(url, { ...options, headers });
+  } catch (networkError) {
+    throw new Error(
+      `Impossible de joindre l'API (${url}). Vérifiez votre connexion et que le serveur backend est démarré.`
+    );
+  }
   if (response.status === 204) return null;
 
-  const data = await response.json().catch(() => ({}));
+  const isJson = (response.headers.get('content-type') || '').includes('application/json');
+  const data = isJson ? await response.json().catch(() => ({})) : {};
   if (!response.ok) {
-    const error = new Error(data.error || `HTTP ${response.status}`);
+    let message = data.error || `HTTP ${response.status}`;
+    if (!isJson) {
+      if (response.status === 404) {
+        message =
+          `L'API est introuvable à cette adresse : ${url}. ` +
+          "L'URL du backend (REACT_APP_API_URL) est probablement incorrecte " +
+          'ou le service backend est encore en cours de déploiement.';
+      } else {
+        message = `Réponse inattendue (HTTP ${response.status}) depuis ${url}.`;
+      }
+    }
+    const error = new Error(message);
     error.status = response.status;
     throw error;
   }
