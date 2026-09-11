@@ -13,6 +13,36 @@ logger = logging.getLogger("chatbot-vocal")
 
 SAMPLE_RATE = 16000
 
+# Sous gevent (production gunicorn), `subprocess` est monkey-patché pour
+# s'appuyer sur les child watchers de la boucle événementielle principale.
+# Les tâches de transcription tournent dans des threads système : lancer
+# ffmpeg depuis ces threads lèverait
+# « child watchers are only available on the default loop », et le Popen
+# natif restauré se bloque sur waitpid. On branche donc pydub sur un
+# lanceur posix_spawnp 100 % natif (native_subprocess.Popen) ; sans gevent
+# (développement Windows/Linux), le subprocess standard reste utilisé.
+try:
+    from gevent.monkey import is_module_patched as _is_patched
+
+    if _is_patched("subprocess"):
+        from types import SimpleNamespace as _SimpleNamespace
+
+        import pydub.audio_segment as _pydub_segment
+        import pydub.utils as _pydub_utils
+
+        from native_subprocess import PIPE as _NATIVE_PIPE
+        from native_subprocess import Popen as _NativePopen
+
+        # pydub.audio_segment référence subprocess.Popen / subprocess.PIPE
+        _pydub_segment.subprocess = _SimpleNamespace(
+            Popen=_NativePopen, PIPE=_NATIVE_PIPE
+        )
+        # pydub.utils fait « from subprocess import Popen, PIPE »
+        _pydub_utils.Popen = _NativePopen
+        _pydub_utils.PIPE = _NATIVE_PIPE
+except Exception:  # noqa: BLE001 - environnement sans gevent (développement)
+    pass
+
 
 class AudioDecodeError(ValueError):
     """Fichier reçu illisible ou ffmpeg absent."""
