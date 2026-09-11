@@ -5,14 +5,14 @@ Pourquoi ce module : en production (gunicorn + GeventWebSocketWorker),
 gevent réserve la surveillance des processus enfants (« child watchers »)
 à sa boucle événementielle principale. Les tâches de transcription
 tournent dans de vrais threads système (voir ``jobs.py``) et appellent
-ffmpeg via pydub : un ``subprocess.Popen`` classique y échoue avec
-« child watchers are only available on the default loop », et le Popen
-natif restauré se bloque sur ``waitpid``.
+directement ffmpeg (voir ``audio_pipeline.py``) : un ``subprocess.Popen``
+classique y échoue avec « child watchers are only available on the
+default loop », et le Popen natif restauré se bloque sur ``waitpid``.
 
 On passe donc par ``os.posix_spawnp`` (sûr depuis un thread, présent sur
 Python 3.8+), avec des tubes en mode non bloquant et des primitives
 ``os``/``time`` *originales* (avant monkey-patch). L'interface est
-volontairement limitée à ce que pydub utilise :
+volontairement limitée à l'appel ffmpeg :
 Popen(argv, stdin=, stdout=, stderr=) puis communicate().
 """
 

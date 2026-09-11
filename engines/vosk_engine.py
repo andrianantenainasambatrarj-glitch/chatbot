@@ -70,14 +70,17 @@ class VoskEngine:
         return recognizer
 
     # ------------------------------------------------------------------
-    def transcribe(self, wav_path, language="fr", progress=None):
+    def transcribe(self, wav_path, language="fr", progress=None, timestamps=False):
+        # Vosk produit nativement les horodatages mot à mot : 'timestamps'
+        # est accepté pour la compatibilité d'interface avec Whisper.
         recognizer = self.create_recognizer(language)
         text_parts, words = [], []
         total = os.path.getsize(wav_path)
         read = 0
         with open(wav_path, "rb") as wf:
             while True:
-                data = wf.read(4000)
+                # 0,5 s de PCM 16 kHz mono 16 bits par bloc
+                data = wf.read(16000)
                 if len(data) == 0:
                     break
                 read += len(data)

@@ -146,6 +146,30 @@ s'endort jamais ; elle demande environ 30 à 45 min de configuration.
 Dites-le-moi si vous choisissez cette voie, je fournis le pas à pas
 complet.
 
+## Vitesse de traitement
+
+Le plan gratuit partage le processeur (environ 0,1 cœur en continu) :
+c'est lui qui fixe la vitesse, pas la connexion. Réglages appliqués
+automatiquement pour limiter le temps de traitement :
+
+- conversion audio en **un seul passage ffmpeg en flux** (mémoire
+  constante, pas de décodage en Python) ;
+- modèle Vosk préchargé au démarrage, Whisper en `tiny` avec
+  décodage glouton (`beam_size=1`) et détection de parole VAD ;
+- un seul traitement à la fois.
+
+Ordres de grandeur visés : un mémo de 30 s avec **Vosk** prend quelques
+secondes après conversion ; **Whisper tiny** est plus lent mais
+nettement plus précis, utilisez-le plutôt pour des fichiers importants.
+Le tout premier appel après 15 min d'inactivité réveille le serveur
+(comptez 30 à 60 s, sans traitement).
+
+À savoir : avec Whisper, l'export SRT (sous-titres horodatés) n'est
+généré que si l'option « Séparer les intervenants » est cochée, car
+l'alignement mot à mot est coûteux sur petit CPU ; Vosk propose toujours
+le SRT. Pour aller beaucoup plus vite sans réveil de serveur, le plan
+Starter (~7 $/mois) donne un processeur dédié.
+
 ## Dépannage
 
 - **`database: error` sur /health** : relisez la chaîne Neon

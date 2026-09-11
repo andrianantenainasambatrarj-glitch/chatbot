@@ -31,6 +31,8 @@ class Config:
     # Au-delà de ce seuil, la transcription passe en tâche asynchrone
     ASYNC_THRESHOLD_MB = float(os.environ.get("ASYNC_THRESHOLD_MB", "5"))
     JOB_WORKERS = int(os.environ.get("JOB_WORKERS", "2"))
+    # Précharge le moteur par défaut au démarrage (désactivé en test)
+    PREWARM_MODELS = _bool("PREWARM_MODELS", default=True)
 
     # CORS
     CORS_ORIGINS = [

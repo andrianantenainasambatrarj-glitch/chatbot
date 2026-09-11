@@ -39,7 +39,13 @@ RUN if [ "$DOWNLOAD_EN_MODEL" = "1" ]; then \
 ENV VOSK_MODELS={\"fr\":\"models/vosk-model-small-fr-0.22\",\"en\":\"models/vosk-model-small-en-us-0.15\"}
 RUN if [ "$INSTALL_WHISPER" = "1" ]; then \
         python -c "from faster_whisper import WhisperModel; \
-WhisperModel('$WHISPER_MODEL_SIZE', device='cpu', compute_type='int8')"; \
+import io, wave, numpy as np; \
+m = WhisperModel('$WHISPER_MODEL_SIZE', device='cpu', compute_type='int8', cpu_threads=1); \
+buf = io.BytesIO(); w = wave.open(buf, 'wb'); w.setnchannels(1); w.setsampwidth(2); \
+w.setframerate(16000); w.writeframes(np.zeros(16000, dtype=np.int16).tobytes()); w.close(); \
+open('/tmp/silence.wav','wb').write(buf.getvalue()); \
+segs, _ = m.transcribe('/tmp/silence.wav', language='fr', beam_size=1, vad_filter=True, condition_on_previous_text=False); \
+list(segs)"; \
     fi
 
 ENV DATA_DIR=/app/data \

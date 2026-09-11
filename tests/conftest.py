@@ -50,7 +50,7 @@ class FakeRecognizer:
 class FakeEngine:
     name = "vosk"
 
-    def transcribe(self, _wav_path, _language="fr", progress=None):
+    def transcribe(self, _wav_path, _language="fr", progress=None, timestamps=False):
         if progress:
             progress(50)
             progress(100)
@@ -70,6 +70,7 @@ def app(tmp_path, monkeypatch):
         SQLALCHEMY_DATABASE_URI = f"sqlite:///{tmp_path / 'test.db'}"
         RATELIMIT_ENABLED = False
         JOB_WORKERS = 2
+        PREWARM_MODELS = False
         VOSK_MODELS = {"fr": "models/fake-fr", "en": "models/fake-en"}
 
     def fake_factory(_name=None):

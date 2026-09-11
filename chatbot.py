@@ -89,6 +89,24 @@ def create_app(config_object=Config):
     # reprendre : on les signale en erreur plutôt que de les laisser bloquées.
     runner.reset_stale_jobs()
 
+    # Préchargement du modèle Vosk par défaut dans un thread système (pour ne
+    # pas retarder la réponse de santé au démarrage) : la première
+    # transcription ne paie alors plus le chargement du modèle (plusieurs
+    # secondes sur petite instance).
+    def _prewarm_vosk():
+        if not app.config.get("PREWARM_MODELS", True):
+            return
+        with app.app_context():
+            try:
+                get_engine("vosk").create_recognizer(app.config["DEFAULT_LANGUAGE"])
+                logger.info("Modèle Vosk '%s' préchargé", app.config["DEFAULT_LANGUAGE"])
+            except Exception:  # noqa: BLE001 - le démarrage ne doit pas échouer
+                logger.warning("Préchauffage Vosk impossible", exc_info=True)
+
+    from jobs import _Thread as _NativeThread
+
+    _NativeThread(target=_prewarm_vosk, name="prewarm-vosk", daemon=True).start()
+
     # ------------------------------------------------------------------
     def owned_transcription_or_404(transcription_id):
         return (

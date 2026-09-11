@@ -7,6 +7,7 @@ Le premier usage télécharge le modèle depuis le réseau.
 
 import importlib.util
 import logging
+import os
 import threading
 
 from flask import current_app
@@ -44,8 +45,16 @@ class WhisperEngine:
                         size = current_app.config["WHISPER_MODEL_SIZE"]
                         device = current_app.config["WHISPER_DEVICE"]
                         compute = current_app.config["WHISPER_COMPUTE_TYPE"]
-                        logger.info("Chargement de faster-whisper (%s, %s/%s)", size, device, compute)
-                        self._model = WhisperModel(size, device=device, compute_type=compute)
+                        # Tous les coeurs disponibles sur les petites instances
+                        cpu_threads = max(1, (os.cpu_count() or 1))
+                        logger.info(
+                            "Chargement de faster-whisper (%s, %s/%s, %d threads)",
+                            size, device, compute, cpu_threads,
+                        )
+                        self._model = WhisperModel(
+                            size, device=device, compute_type=compute,
+                            cpu_threads=cpu_threads, num_workers=1,
+                        )
                     except WhisperUnavailableError:
                         raise
                     except Exception as exc:
@@ -54,7 +63,7 @@ class WhisperEngine:
                         ) from exc
         return self._model
 
-    def transcribe(self, wav_path, language="fr", progress=None):
+    def transcribe(self, wav_path, language="fr", progress=None, timestamps=False):
         model = self._get_model()
         if progress:
             progress(20)
@@ -62,7 +71,17 @@ class WhisperEngine:
             segments, _info = model.transcribe(
                 wav_path,
                 language=language,
-                word_timestamps=True,
+                # Décodage glouton (beam_size=1) : 2 à 4 fois plus rapide sur
+                # petits CPU, qualité quasi identique sur des mémos vocaux.
+                beam_size=1,
+                # Pas de conditionnement sur le texte précédent : évite les
+                # répétitions hallucinées et accélère le traitement.
+                condition_on_previous_text=False,
+                # L'alignement mot à mot (DTW) est coûteux sur CPU : on ne le
+                # calcule que pour la diarisation (les exports SRT Whisper
+                # deviennent indisponibles sinon).
+                word_timestamps=bool(timestamps),
+                # Ignore les silences : moins de travail, moins d'hallucinations.
                 vad_filter=True,
             )
         except Exception as exc:

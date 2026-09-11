@@ -1,3 +1,5 @@
 # Moteur de transcription alternatif à Vosk : plus précis, multilingue.
 # Le premier usage télécharge le modèle (réseau requis).
 faster-whisper==1.0.3
+# Préchauffage de l'image Docker (génération d'un silence de test)
+numpy>=1.24,<3

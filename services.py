@@ -95,7 +95,11 @@ def transcribe_file(*, user, audio_path, engine="vosk", language="fr",
         engine_obj = get_engine(engine)
         if progress:
             progress(5)
-        text, words = engine_obj.transcribe(wav_path, language, progress)
+        # L'alignement mot à mot (coûteux sur CPU pour Whisper) n'est requis
+        # que par la diarisation ; Vosk fournit toujours les horodatages.
+        text, words = engine_obj.transcribe(
+            wav_path, language, progress, timestamps=diarization
+        )
         text = text.strip()
         if not text:
             raise ValueError("Aucun texte transcrit (audio vide, silencieux ou inaudible).")
