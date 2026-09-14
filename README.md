@@ -228,6 +228,49 @@ Outil éducatif uniquement. Pas un conseil financier. Toujours confirmer avec to
 
 ---
 
+## 🔥 HLZ Complet — Spécialisation
+
+Ce projet supporte maintenant les **styles de trading** dont **HLZ Complet** :
+
+- **HLZ Complet** (High Low ZigZag) : Structure HH/HL, BOS, CHOCH, Order Blocks, FVG, Liquidités, Premium/Discount
+- SMC, ICT, Price Action, Elliott, Général
+
+**Comment l'utiliser pour HLZ :**
+
+1. Découpe ton cours HLZ en 8-10 PDFs thématiques :
+   ```
+   01_HLZ_Structure.pdf, 02_HLZ_BOS.pdf, 03_HLZ_CHOCH.pdf, 04_HLZ_OB.pdf, 
+   05_HLZ_FVG.pdf, 06_HLZ_Liquidites.pdf, 07_HLZ_Premium_Discount.pdf, 08_HLZ_Checklist.pdf
+   ```
+   Voir guide complet dans `docs/HLZ_GUIDE.md`
+
+2. Dans l'UI, sélectionne style **HLZ Complet 🔥**
+
+3. Upload tous les PDFs → Indexation → Upload graphique → Analyse HLZ avec vocabulaire BOS/CHOCH/OB/FVG
+
+Le RAG va citer exactement tes règles HLZ dans "Méthodologie (RAG)".
+
+## 🔀 Repo séparé — Important
+
+Si tu as cloné ce projet depuis `andrianantenainasambatrarj-glitch/chatbot` branche `arena/...`, ta branche `main` (ancien chatbot) est intacte.
+
+Pour créer un repo propre pour le trading :
+
+1. Crée nouveau repo vide sur GitHub : https://github.com/new → `trading-hlz-ai`
+2. Puis :
+```bash
+git clone https://github.com/andrianantenainasambatrarj-glitch/trading-hlz-ai.git
+cd trading-hlz-ai
+git remote add old https://github.com/andrianantenainasambatrarj-glitch/chatbot.git
+git fetch old
+git checkout old/arena/01a09f1f-chatbot -- .
+git add -A && git commit -m "feat: HLZ AI initial" && git push origin main
+```
+
+Ou utilise `scripts/create_new_repo.sh` fourni. Voir `MIGRATE_TO_NEW_REPO.md`.
+
+---
+
 **Créé pour toi — prêt à deploy gratuit sans PC puissant 🚀**
 
 Si tu bloques sur le deploy, ouvre une issue ou demande ici.
