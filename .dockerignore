@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.env
+.git
+.gitignore
+data/chroma_db/*
+data/pdfs/*
+data/temp/*
+!data/pdfs/.gitkeep
+!data/chroma_db/.gitkeep
+*.log
+.DS_Store

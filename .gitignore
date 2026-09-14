@@ -8,45 +8,31 @@ venv/
 env/
 ENV/
 
-# Environnements et secrets
+# Secrets
 .env
 .env.*
 !.env.example
 *.secret
 *.key
 
-# Dépendances et outils locaux
-site-packages/
-*.exe
-.vscode/
+# Data - keep structure but ignore content
+data/chroma_db/*
+data/pdfs/*
+data/temp/*
+!data/pdfs/.gitkeep
+!data/chroma_db/.gitkeep
 
-# Données NLTK téléchargées
-nltk_data/*
-!nltk_data/setup_nltk.py
-
-# Modèles lourds
+# Models
 models/
 
-# Fichiers générés par l'application
-static/*.docx
-static/*.wav
-static/*.webm
-static/*_history.json
-
-# Logs et fichiers temporaires
+# Logs
 *.log
 *.tmp
 *.temp
 
-# Frontend
-frontend/node_modules/
-frontend/build/
-frontend/coverage/
-frontend/.env.local
-frontend/.env.development.local
-frontend/.env.test.local
-frontend/.env.production.local
-
-# Système
+# System
 .DS_Store
 Thumbs.db
+
+# Node (if any)
+node_modules/

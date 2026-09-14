@@ -1,4 +1,29 @@
-flask
-SpeechRecognition
-python-docx
-flask-cors 
+# Core
+fastapi
+uvicorn[standard]
+python-multipart
+jinja2
+python-dotenv
+pydantic
+pydantic-settings
+
+# PDF Extraction
+pdfplumber
+PyPDF2
+
+# Vector DB & Embeddings
+chromadb
+scikit-learn
+numpy
+Pillow
+
+# LLM APIs - optional but recommended
+openai
+anthropic
+google-generativeai
+httpx
+aiofiles
+
+# Optional for better local embeddings (heavy, uncomment if needed)
+# torch -- CPU version
+# sentence-transformers
