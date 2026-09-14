@@ -11,6 +11,7 @@ import shutil
 import uuid
 
 from app.config import settings
+from app.config.styles import list_styles, get_style
 from app.services.pdf_service import PDFService
 from app.services.embedding_service import EmbeddingService
 from app.services.vector_store import VectorStoreService
@@ -166,7 +167,8 @@ async def upload_pdfs(files: List[UploadFile] = File(...)):
 @app.post("/api/analyze")
 async def analyze_chart(
     file: UploadFile = File(...),
-    top_k: int = Form(5)
+    top_k: int = Form(5),
+    style: str = Form("general")
 ):
     if not is_allowed_image(file.filename):
         raise HTTPException(status_code=400, detail="Format image non supporté. Utilisez JPG, PNG, WEBP")
@@ -185,7 +187,11 @@ async def analyze_chart(
     
     try:
         analysis_service = get_analysis_service()
-        result = analysis_service.analyze(temp_path, top_k=top_k)
+        # Validate style
+        valid_styles = [s["key"] for s in list_styles()]
+        if style not in valid_styles:
+            style = "general"
+        result = analysis_service.analyze(temp_path, top_k=top_k, style_key=style)
         return JSONResponse(content=result)
     except Exception as e:
         logger.error(f"Analysis error: {e}", exc_info=True)
@@ -205,6 +211,10 @@ async def clear_knowledge():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/styles")
+async def get_trading_styles():
+    return {"styles": list_styles()}
+
 @app.get("/api/examples")
 async def get_examples():
     """Retourne des exemples de prompts / patterns"""
@@ -216,14 +226,27 @@ async def get_examples():
             "drapeau / fanion",
             "biseau",
             "canal haussier/baissier",
-            "support/résistance"
+            "support/résistance",
+            "HLZ: BOS, CHOCH, OB, FVG, Liquidité"
         ],
         "tips": [
             "Uploadez vos PDFs de cours pour que l'IA utilise VOTRE méthode",
+            "Pour HLZ: uploadez PDFs séparés par concept (BOS, CHOCH, OB, FVG, Liquidité, Premium/Discount)",
             "Utilisez des captures nettes avec bougies visibles",
             "Plus vos PDFs sont structurés (un concept = un chapitre), mieux c'est",
+            "Sélectionnez le style HLZ dans le menu pour une analyse spécialisée",
             "L'analyse fonctionne même sans PDFs, mais sera plus précise avec"
-        ]
+        ],
+        "hlz_guide": {
+            "title": "Comment préparer tes PDFs HLZ Complet",
+            "steps": [
+                "1. Découpe ton cours HLZ en 6-8 PDFs thématiques: Structure (HH/HL), BOS/CHOCH, Order Blocks, FVG, Liquidités, Premium/Discount, Entry Models, Exemples",
+                "2. Chaque PDF doit avoir: Définition claire, Règles de validation, 2-3 exemples graphiques décrits en texte, Erreurs à éviter",
+                "3. Utilise des titres clairs: 'HLZ - Order Block - Définition et validation' pour que le RAG retrouve facilement",
+                "4. Évite les PDFs scannés image-only, le texte doit être sélectionnable",
+                "5. Bonus: Ajoute un PDF 'HLZ Checklist' avec checklist entrée/sortie que l'IA pourra citer"
+            ]
+        }
     }
 
 # For HuggingFace Spaces compatibility

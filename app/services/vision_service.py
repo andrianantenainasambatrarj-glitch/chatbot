@@ -8,7 +8,7 @@ import io
 
 logger = logging.getLogger(__name__)
 
-VISION_PROMPT = """Tu es un expert en analyse technique de trading avec 20 ans d'expérience.
+VISION_PROMPT_BASE = """Tu es un expert en analyse technique de trading avec 20 ans d'expérience.
 
 Analyse cette image de graphique de trading en détail. Décris:
 
@@ -33,6 +33,14 @@ Réponds en JSON avec cette structure:
 }
 """
 
+def build_vision_prompt(style_addition: str = "") -> str:
+    if style_addition:
+        return VISION_PROMPT_BASE + "\n\n" + style_addition
+    return VISION_PROMPT_BASE
+
+# Keep for backward compat
+VISION_PROMPT = VISION_PROMPT_BASE
+
 class VisionService:
     def __init__(self):
         self.openai_key = os.getenv("OPENAI_API_KEY")
@@ -53,7 +61,7 @@ class VisionService:
         with open(image_path, "rb") as f:
             return base64.b64encode(f.read()).decode('utf-8')
 
-    def _analyze_with_openai(self, image_path: Path) -> Optional[Dict[str, Any]]:
+    def _analyze_with_openai(self, image_path: Path, style_prompt: str = "") -> Optional[Dict[str, Any]]:
         if not self.openai_key:
             return None
         try:
@@ -61,6 +69,7 @@ class VisionService:
             client = OpenAI(api_key=self.openai_key)
             
             base64_image = self._encode_image(image_path)
+            prompt = build_vision_prompt(style_prompt)
             
             response = client.chat.completions.create(
                 model=os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini"),
@@ -68,7 +77,7 @@ class VisionService:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": VISION_PROMPT},
+                            {"type": "text", "text": prompt},
                             {
                                 "type": "image_url",
                                 "image_url": {
@@ -89,7 +98,7 @@ class VisionService:
             logger.error(f"OpenAI vision failed: {e}")
             return None
 
-    def _analyze_with_anthropic(self, image_path: Path) -> Optional[Dict[str, Any]]:
+    def _analyze_with_anthropic(self, image_path: Path, style_prompt: str = "") -> Optional[Dict[str, Any]]:
         if not self.anthropic_key:
             return None
         try:
@@ -107,6 +116,7 @@ class VisionService:
                 media_type = "image/gif"
             
             base64_image = self._encode_image(image_path)
+            prompt = build_vision_prompt(style_prompt)
             
             response = client.messages.create(
                 model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
@@ -125,7 +135,7 @@ class VisionService:
                             },
                             {
                                 "type": "text",
-                                "text": VISION_PROMPT
+                                "text": prompt
                             }
                         ]
                     }
@@ -138,7 +148,7 @@ class VisionService:
             logger.error(f"Anthropic vision failed: {e}")
             return None
 
-    def _analyze_with_google(self, image_path: Path) -> Optional[Dict[str, Any]]:
+    def _analyze_with_google(self, image_path: Path, style_prompt: str = "") -> Optional[Dict[str, Any]]:
         if not self.google_key:
             return None
         try:
@@ -147,8 +157,9 @@ class VisionService:
             model = genai.GenerativeModel(os.getenv("GOOGLE_MODEL", "gemini-1.5-flash"))
             
             img = Image.open(image_path)
+            prompt = build_vision_prompt(style_prompt)
             
-            response = model.generate_content([VISION_PROMPT, img])
+            response = model.generate_content([prompt, img])
             content = response.text
             return self._parse_json_response(content)
         except Exception as e:
@@ -236,24 +247,33 @@ class VisionService:
                 "key_observations": f"Erreur: {str(e)}"
             }
 
-    def analyze_image(self, image_path: Path) -> Dict[str, Any]:
+    def analyze_image(self, image_path: Path, style_key: str = "general") -> Dict[str, Any]:
         """Point d'entrée principal"""
+        # Get style prompt
+        try:
+            from app.config.styles import get_style
+            style = get_style(style_key)
+            style_prompt = style.get("vision_prompt_addition", "")
+        except:
+            style_prompt = ""
+            style = {"name": style_key}
+        
         # Try providers in order: OpenAI, Anthropic, Google, then fallback
         result = None
         provider_used = "local"
         
         if "openai" in self.available_providers:
-            result = self._analyze_with_openai(image_path)
+            result = self._analyze_with_openai(image_path, style_prompt)
             if result:
                 provider_used = "openai"
         
         if not result and "anthropic" in self.available_providers:
-            result = self._analyze_with_anthropic(image_path)
+            result = self._analyze_with_anthropic(image_path, style_prompt)
             if result:
                 provider_used = "anthropic"
         
         if not result and "google" in self.available_providers:
-            result = self._analyze_with_google(image_path)
+            result = self._analyze_with_google(image_path, style_prompt)
             if result:
                 provider_used = "google"
         
@@ -262,6 +282,7 @@ class VisionService:
             provider_used = "local"
         
         result["provider"] = provider_used
+        result["style_used"] = style_key
         return result
 
     def get_available_providers(self) -> Dict[str, bool]:

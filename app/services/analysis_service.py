@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
-FINAL_SYNTHESIS_PROMPT = """Tu es un expert trading senior. Tu dois produire une analyse finale structurée en t'appuyant sur:
+FINAL_SYNTHESIS_PROMPT_BASE = """Tu es un expert trading senior spécialisé en {style_name}. Tu dois produire une analyse finale structurée en t'appuyant sur:
 
 1. L'ANALYSE VISUELLE du graphique:
 {vision_analysis}
@@ -13,34 +13,47 @@ FINAL_SYNTHESIS_PROMPT = """Tu es un expert trading senior. Tu dois produire une
 2. Le CONTEXTE DES COURS (méthodologie de l'utilisateur):
 {rag_context}
 
-Ta tâche: Fusionne ces deux sources pour produire une analyse professionnelle.
+3. STYLE DE TRADING: {style_name} - {style_description}
+{style_addition}
+
+Ta tâche: Fusionne ces deux sources pour produire une analyse professionnelle SELON LE STYLE {style_name}.
 
 RÈGLES:
 - Si les cours mentionnent une méthodologie spécifique (ex: "selon la méthode X, un double top se valide par..."), cite-la explicitement
 - Sois honnête sur ton niveau de confiance
 - Donne des niveaux de prix concrets si visibles
-- Explique la logique derrière ta prédiction
-- Mentionne les risques et invalidations
+- Explique la logique derrière ta prédiction en utilisant le vocabulaire du style {style_name}
+- Mentionne les risques et invalidations spécifiques au style
+- Si style HLZ: utilise BOS, CHOCH, OB, FVG, Liquidité, Premium/Discount, OTE
 
 Réponds en JSON avec cette structure exacte:
 {{
-  "pattern_principal": "nom du pattern principal détecté",
+  "pattern_principal": "nom du pattern principal détecté selon {style_name}",
   "confiance": 0.0-1.0,
-  "explication_methodologie": "comment ta détection s'appuie sur les cours fournis",
-  "analyse_technique": "analyse technique détaillée (3-5 phrases)",
-  "prediction": "prédiction haussière/baissière/latérale avec justification et target",
+  "explication_methodologie": "comment ta détection s'appuie sur les cours fournis et le style {style_name}",
+  "analyse_technique": "analyse technique détaillée (3-5 phrases) en vocabulaire {style_name}",
+  "prediction": "prédiction haussière/baissière/latérale avec justification et target selon {style_name}",
   "niveaux_cles": {{
     "supports": ["liste supports"],
     "resistances": ["liste résistances"],
-    "entree": ["zones d'entrée potentielles"],
+    "entree": ["zones d'entrée potentielles selon {style_name}"],
     "stop_loss": ["niveaux stop loss"],
     "take_profit": ["objectifs"]
   }},
-  "risques": "risques et conditions d'invalidation",
-  "recommandation": "recommandation actionnable",
+  "risques": "risques et conditions d'invalidation selon {style_name}",
+  "recommandation": "recommandation actionnable selon {style_name}",
   "timeframe_suggere": "timeframe suggéré pour le trade"
 }}
 """
+
+def build_final_prompt(vision_analysis, rag_context, style):
+    return FINAL_SYNTHESIS_PROMPT_BASE.format(
+        vision_analysis=vision_analysis,
+        rag_context=rag_context,
+        style_name=style.get("name", "Général"),
+        style_description=style.get("description", ""),
+        style_addition=style.get("analysis_prompt_addition", "")
+    )
 
 class AnalysisService:
     def __init__(self, rag_service, vision_service):
@@ -75,9 +88,10 @@ Indicateurs: {', '.join(vision.get('indicators', []))}
 Observations clés: {vision.get('key_observations','')}
 Confiance vision: {vision.get('confidence',0)}
 Provider: {vision.get('provider','')}
+Style: {vision.get('style_used','general')}
 """
 
-    def _synthesize_with_openai(self, vision_str: str, rag_str: str) -> Optional[Dict[str, Any]]:
+    def _synthesize_with_openai(self, vision_str: str, rag_str: str, style: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not self.openai_key:
             return None
         try:
@@ -85,15 +99,12 @@ Provider: {vision.get('provider','')}
             import json, re
             client = OpenAI(api_key=self.openai_key)
             
-            prompt = FINAL_SYNTHESIS_PROMPT.format(
-                vision_analysis=vision_str,
-                rag_context=rag_str
-            )
+            prompt = build_final_prompt(vision_str, rag_str, style)
             
             response = client.chat.completions.create(
                 model=os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini"),
                 messages=[
-                    {"role": "system", "content": "Tu es un expert trading qui répond uniquement en JSON valide."},
+                    {"role": "system", "content": f"Tu es un expert trading {style.get('name','')} qui répond uniquement en JSON valide."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=2000,
@@ -119,17 +130,14 @@ Provider: {vision.get('provider','')}
             logger.error(f"OpenAI synthesis failed: {e}")
             return None
 
-    def _synthesize_with_anthropic(self, vision_str: str, rag_str: str) -> Optional[Dict[str, Any]]:
+    def _synthesize_with_anthropic(self, vision_str: str, rag_str: str, style: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not self.anthropic_key:
             return None
         try:
             import anthropic, json, re
             client = anthropic.Anthropic(api_key=self.anthropic_key)
             
-            prompt = FINAL_SYNTHESIS_PROMPT.format(
-                vision_analysis=vision_str,
-                rag_context=rag_str
-            )
+            prompt = build_final_prompt(vision_str, rag_str, style)
             
             response = client.messages.create(
                 model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
@@ -153,7 +161,7 @@ Provider: {vision.get('provider','')}
             logger.error(f"Anthropic synthesis failed: {e}")
             return None
 
-    def _synthesize_with_google(self, vision_str: str, rag_str: str) -> Optional[Dict[str, Any]]:
+    def _synthesize_with_google(self, vision_str: str, rag_str: str, style: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not self.google_key:
             return None
         try:
@@ -162,10 +170,7 @@ Provider: {vision.get('provider','')}
             genai.configure(api_key=self.google_key)
             model = genai.GenerativeModel(os.getenv("GOOGLE_MODEL", "gemini-1.5-flash"))
             
-            prompt = FINAL_SYNTHESIS_PROMPT.format(
-                vision_analysis=vision_str,
-                rag_context=rag_str
-            )
+            prompt = build_final_prompt(vision_str, rag_str, style)
             
             response = model.generate_content(prompt)
             content = response.text
@@ -230,10 +235,17 @@ Provider: {vision.get('provider','')}
             "timeframe_suggere": "Confirmer en H4/Daily, entrée en M15/H1"
         }
 
-    def analyze(self, image_path: Path, top_k: int = 5) -> Dict[str, Any]:
+    def analyze(self, image_path: Path, top_k: int = 5, style_key: str = "general") -> Dict[str, Any]:
+        # Get style
+        try:
+            from app.config.styles import get_style
+            style = get_style(style_key)
+        except:
+            style = {"name": style_key, "description": "", "analysis_prompt_addition": ""}
+        
         # Step 1: Vision
-        logger.info(f"Starting vision analysis for {image_path}")
-        vision_result = self.vision_service.analyze_image(image_path)
+        logger.info(f"Starting vision analysis for {image_path} with style {style_key}")
+        vision_result = self.vision_service.analyze_image(image_path, style_key=style_key)
         
         # Step 2: RAG search from vision
         logger.info("Searching RAG from vision analysis")
@@ -248,23 +260,27 @@ Provider: {vision.get('provider','')}
         
         # Try LLM synthesis in order
         if self.openai_key:
-            synthesis = self._synthesize_with_openai(vision_str, rag_str)
+            synthesis = self._synthesize_with_openai(vision_str, rag_str, style)
             if synthesis:
                 model_used = f"openai:{os.getenv('OPENAI_TEXT_MODEL','gpt-4o-mini')}"
         
         if not synthesis and self.anthropic_key:
-            synthesis = self._synthesize_with_anthropic(vision_str, rag_str)
+            synthesis = self._synthesize_with_anthropic(vision_str, rag_str, style)
             if synthesis:
                 model_used = f"anthropic:{os.getenv('ANTHROPIC_MODEL','claude-3-5-sonnet')}"
         
         if not synthesis and self.google_key:
-            synthesis = self._synthesize_with_google(vision_str, rag_str)
+            synthesis = self._synthesize_with_google(vision_str, rag_str, style)
             if synthesis:
                 model_used = f"google:{os.getenv('GOOGLE_MODEL','gemini-1.5-flash')}"
         
         if not synthesis:
             synthesis = self._synthesize_local(vision_result, rag_results)
-            model_used = "local-heuristic"
+            # Enhance local with style
+            if style_key == "hlz":
+                synthesis["recommandation"] = f"[HLZ] {synthesis['recommandation']} | Cherche OB+FVG+Liquidité en Discount/Premium"
+                synthesis["analyse_technique"] = f"[HLZ - {style['name']}] {synthesis['analyse_technique']}"
+            model_used = f"local-heuristic-{style_key}"
         
         # Ensure all required fields
         default_levels = {

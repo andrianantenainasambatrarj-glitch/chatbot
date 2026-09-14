@@ -3,6 +3,8 @@ const $$ = (s) => document.querySelectorAll(s);
 
 let selectedPdfs = [];
 let selectedImage = null;
+let tradingStyles = [];
+let selectedStyle = "hlz";
 
 // Elements
 const pdfDrop = $('#pdfDrop');
@@ -28,6 +30,7 @@ const emptyState = $('#emptyState');
 // Init
 document.addEventListener('DOMContentLoaded', () => {
   loadStatus();
+  loadStyles();
   setupEvents();
   setupTabs();
 });
@@ -58,6 +61,15 @@ function setupEvents() {
   imageInput.addEventListener('change', e => { if (e.target.files[0]) handleImageFile(e.target.files[0]); });
   removeImageBtn.addEventListener('click', clearImage);
   analyzeBtn.addEventListener('click', analyzeImage);
+
+  // Style select
+  const styleSelect = $('#styleSelect');
+  if (styleSelect) {
+    styleSelect.addEventListener('change', e => {
+      selectedStyle = e.target.value;
+      updateStyleDesc(selectedStyle);
+    });
+  }
 }
 
 function setupTabs() {
@@ -70,6 +82,68 @@ function setupTabs() {
       $(`#tab-${tab}`).classList.remove('hidden');
     });
   });
+}
+
+async function loadStyles() {
+  try {
+    const res = await fetch('/api/styles');
+    const data = await res.json();
+    tradingStyles = data.styles || [];
+    
+    const grid = $('#styleGrid');
+    const select = $('#styleSelect');
+    if (!grid) return;
+
+    grid.innerHTML = tradingStyles.map(s => {
+      const isHLZ = s.key === 'hlz';
+      const isSelected = s.key === selectedStyle;
+      return `
+        <button data-style="${s.key}" class="styleBtn text-left p-3 rounded-xl border transition flex items-center gap-3 ${isSelected ? 'bg-gradient-to-r '+s.color+' border-transparent text-white' : 'bg-[#0f141c] border-[#1e2a3a] hover:border-[#2a3a52] text-[#8b9bb0] hover:text-white'}">
+          <div class="w-8 h-8 rounded-lg ${isSelected ? 'bg-white/20' : 'bg-[#1a2332]'} flex items-center justify-center flex-shrink-0">
+            <i class="fas ${s.icon} text-sm"></i>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-xs ${isSelected ? 'text-white' : 'text-white'}">${s.name} ${isHLZ ? '🔥' : ''}</div>
+            <div class="text-[11px] truncate ${isSelected ? 'text-white/80' : 'text-[#5a6b80]'}">${s.description}</div>
+          </div>
+          ${isSelected ? '<i class="fas fa-check text-xs"></i>' : ''}
+        </button>
+      `;
+    }).join('');
+
+    // Add click handlers
+    $$('.styleBtn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedStyle = btn.dataset.style;
+        if (select) select.value = selectedStyle;
+        // Re-render grid
+        loadStyles();
+        updateStyleDesc(selectedStyle);
+      });
+    });
+
+    // Populate select if empty
+    if (select && select.options.length <= 1) {
+      select.innerHTML = tradingStyles.map(s => `<option value="${s.key}" ${s.key===selectedStyle?'selected':''}>${s.name}</option>`).join('');
+    }
+
+    updateStyleDesc(selectedStyle);
+  } catch (e) {
+    console.error('Failed to load styles', e);
+  }
+}
+
+function updateStyleDesc(key) {
+  const descEl = $('#styleDesc');
+  if (!descEl) return;
+  const style = tradingStyles.find(s => s.key === key);
+  if (!style) return;
+  descEl.classList.remove('hidden');
+  descEl.innerHTML = `
+    <div class="flex items-center gap-2 mb-1"><i class="fas ${style.icon}"></i><b class="text-white">${style.name}</b></div>
+    <p class="text-[11px]">${style.description}</p>
+    ${style.key==='hlz' ? '<p class="mt-2 text-[11px] text-orange-200">💡 HLZ = Structure + Liquidité + OB + FVG + Premium/Discount. Uploade tes PDFs découpés par concept pour que le RAG cite exactement ta méthode HLZ.</p>' : ''}
+  `;
 }
 
 async function loadStatus() {
@@ -87,7 +161,7 @@ async function loadStatus() {
     
     const healthRes = await fetch('/api/health');
     const health = await healthRes.json();
-    $('#healthText').textContent = `API ${health.status} • ${data.embedding_mode}`;
+    $('#healthText').textContent = `API ${health.status} • ${data.embedding_mode} • Style: ${selectedStyle.toUpperCase()}`;
   } catch (e) {
     $('#healthText').textContent = 'Hors ligne';
   }
@@ -140,7 +214,7 @@ async function uploadPdfs() {
       selectedPdfs = [];
       pdfInput.value = '';
       loadStatus();
-      toast(`✅ ${data.chunks_created} chunks indexés`, 'success');
+      toast(`✅ ${data.chunks_created} chunks indexés (${selectedStyle.toUpperCase()})`, 'success');
     }, 800);
   } catch (e) {
     toast(`❌ ${e.message}`, 'error');
@@ -180,20 +254,21 @@ async function analyzeImage() {
   analyzeProgress.classList.remove('hidden');
   resultsWrap.classList.add('hidden');
   analyzeBar.style.width = '20%';
-  analyzeStep.textContent = 'Analyse vision LLM...';
+  analyzeStep.textContent = `Analyse vision LLM [${selectedStyle.toUpperCase()}]...`;
 
   const fd = new FormData();
   fd.append('file', selectedImage);
   fd.append('top_k', $('#topKSelect').value);
+  fd.append('style', selectedStyle);
 
   // Simulate progress
   let progress = 20;
   const interval = setInterval(() => {
     progress = Math.min(progress + Math.random()*15, 90);
     analyzeBar.style.width = `${progress}%`;
-    if (progress < 40) analyzeStep.textContent = 'Vision LLM → description du graphique...';
-    else if (progress < 70) analyzeStep.textContent = 'Recherche RAG dans vos cours...';
-    else analyzeStep.textContent = 'Synthèse finale & prédiction...';
+    if (progress < 40) analyzeStep.textContent = `Vision LLM ${selectedStyle.toUpperCase()} → description du graphique...`;
+    else if (progress < 70) analyzeStep.textContent = `Recherche RAG dans tes cours ${selectedStyle.toUpperCase()}...`;
+    else analyzeStep.textContent = `Synthèse finale HLZ/SMC → prédiction...`;
   }, 600);
 
   try {
@@ -229,11 +304,11 @@ function displayResults(data) {
   $('#confidenceBadge').className = `px-2.5 py-1 rounded-full text-xs font-bold border ${conf>70 ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : conf>40 ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`;
   
   const trend = data.vision?.trend || 'indecis';
-  $('#trendBadge').textContent = trend;
+  $('#trendBadge').textContent = `${trend} • ${data.vision?.style_used?.toUpperCase() || selectedStyle.toUpperCase()}`;
   const trendColor = trend==='haussier' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : trend==='baissier' ? 'bg-red-500/20 text-red-400 border-red-500/30' : 'bg-[#1a2332] border-[#243044]';
   $('#trendBadge').className = `px-2.5 py-1 rounded-full text-xs font-medium border ${trendColor}`;
   
-  $('#modelUsed').textContent = `Modèle: ${data.model_utilise} • Provider vision: ${data.vision?.provider||'local'} • ${data.sources_utilisees?.length||0} sources`;
+  $('#modelUsed').textContent = `Modèle: ${data.model_utilise} • Vision: ${data.vision?.provider||'local'} • Style: ${data.vision?.style_used||selectedStyle} • ${data.sources_utilisees?.length||0} sources`;
   
   const predShort = (data.prediction||'').slice(0,80);
   $('#predictionShort').textContent = predShort;
@@ -270,11 +345,11 @@ function displayResults(data) {
       </div>
     `).join('');
   } else {
-    ragDiv.innerHTML = `<div class="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">Aucun contexte de cours trouvé. Uploadez vos PDFs pour enrichir l'analyse avec votre méthode.</div>`;
+    ragDiv.innerHTML = `<div class="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">Aucun contexte de cours trouvé. Uploadez vos PDFs HLZ (BOS, OB, FVG, Liquidités...) pour que l'IA cite exactement ta méthode.</div>`;
   }
 
   // Vision
-  $('#visionTrend').textContent = data.vision?.trend || '-';
+  $('#visionTrend').textContent = `${data.vision?.trend || '-'} (${data.vision?.style_used||''})`;
   $('#visionConf').textContent = `${Math.round((data.vision?.confidence||0)*100)}%`;
   $('#visionDesc').textContent = data.vision?.description || '-';
   $('#visionPatterns').innerHTML = (data.vision?.patterns_detected||[]).map(p => `<span class="px-2 py-1 rounded-full bg-violet-500/20 text-violet-300 text-[11px] border border-violet-500/20">${p}</span>`).join('') || '<span class="text-xs text-[#5a6b80]">Aucun</span>';
